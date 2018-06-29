@@ -1,0 +1,1294 @@
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 1 - 6/27/2018 6:13:16
+
+
+       1/       0 :                     	cpu	z80
+       2/       0 :                     
+       3/       0 :                     ;********************************************************************
+       4/       0 :                     ;* Z80 scrumpel 2d monitor with cp/m bootloader                     *
+       5/       0 :                     ;* (c) 2018 N Brok, PE1GOO                                          *
+       6/       0 :                     ;* Created 24 june 2018   ROM Version                               *
+       7/       0 :                     ;********************************************************************
+       8/       0 :                     
+       9/       0 :                     ;* Serial I/O with 82C51A *
+      10/       0 :                     
+      11/       0 : =1H                 acia0stat	equ	1
+      12/       0 : =0H                 acia0data	equ	0
+      13/       0 :                     
+      14/       0 : =A1H                acia1stat	equ	0a1h
+      15/       0 : =A0H                acia1data	equ	0a0h
+      16/       0 :                     
+      17/       0 :                     ;* Parallel ports 82C55 *
+      18/       0 :                     
+      19/       0 : =20H                port0a		equ	20h
+      20/       0 : =21H                port0b		equ	21h
+      21/       0 : =22H                port0c		equ	22h
+      22/       0 : =23H                port0ctl	equ	23h
+      23/       0 : =60H                port1a		equ	60h			;Used for IDE controller
+      24/       0 : =61H                port1b		equ	61h			;Used for IDE controller
+      25/       0 : =62H                port1c		equ	62h
+      26/       0 : =63H                port1ctl	equ	63h
+      27/       0 :                     
+      28/       0 :                     ; Port 1a and 1b are used for the IDE interface
+      29/       0 :                     
+      30/       0 :                     ; Software SPI for RTC and SD-card
+      31/       0 :                     
+      32/       0 : =80H                sd_port		equ	80h
+      33/       0 :                     
+      34/       0 : =40H                romdis		equ	40h
+      35/       0 :                     
+      36/       0 : =CH                 cls		equ	0ch
+      37/       0 : =DH                 cr		equ	0dh
+      38/       0 : =AH                 lf		equ	0ah
+      39/       0 : =1BH                esc		equ	1bh
+      40/       0 : =8H                 bs		equ	08h
+      41/       0 : =20H                space		equ	20h
+      42/       0 :                     
+      43/       0 : =2000H              membegin	equ	2000h
+      44/       0 : =2000H              crc		equ	membegin
+      45/       0 : =2001H              teller		equ	crc+1
+      46/       0 : =2002H              buffer		equ	teller+1
+      47/       0 : =2004H              tobuf		equ	buffer+2
+      48/       0 : =2006H              dmaaddr		equ	tobuf+2
+      49/       0 : =2008H              secno		equ	dmaaddr+2
+      50/       0 :                     
+      51/       0 : =2400H              stackbase	equ	membegin+1024
+      52/       0 :                     
+      53/       0 :                     	org	0
+      54/       0 :                     
+      55/       0 :                     ; Initialisation routines
+      56/       0 :                     
+      57/       0 : ED 56               rst00	im	1		; IM Mode is 1
+      58/       2 : F3                  	di			; Disable Interrupts
+      59/       3 : 18 64               	jr	init
+      60/       5 :                     
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 2 - 6/27/2018 6:13:16
+
+
+      61/       5 :                     ; TX a character over RS232 ACIA0
+      62/       5 :                     
+      63/       8 :                     	org	8
+      64/       8 : C3 52 01            rst08	jp	sot
+      65/       B :                     
+      66/       B :                     ; RX a character over RS232 ACIA0
+      67/       B :                     
+      68/      10 :                     	org	010h
+      69/      10 : C3 8F 01            rst10	jp	sin
+      70/      13 :                     
+      71/      13 :                     ; Check serial status
+      72/      13 :                     
+      73/      18 :                     	org	018h
+      74/      18 : DB 01               rst18	in	a,(acia0stat)
+      75/      1A : CB 4F               	bit	1,a
+      76/      1C : C9                  	ret
+      77/      1D :                     
+      78/      1D :                     ; NMI vector
+      79/      66 :                     	org	0066h
+      80/      66 : C3 79 02            	jp	return
+      81/      69 :                     
+      82/      69 : AF                  init	xor	a			; Clr A
+      83/      6A : D3 01               	out	(acia0stat),a		; Reset 8251 sequence.
+      84/      6C : D3 01               	out	(acia0stat),a
+      85/      6E : D3 01               	out	(acia0stat),a
+      86/      70 : 3E 40               	ld	a,40h			; Set 8251 reset flag
+      87/      72 : D3 01               	out	(acia0stat),a
+      88/      74 : 3E 4E               	ld	a,01001110b		; 1 stopbits, 8 databits and 16Xbaud
+      89/      76 : D3 01               	out	(acia0stat),a
+      90/      78 : 3E 25               	ld	a,00100101b		; TX and RX enabled
+      91/      7A : D3 01               	out	(acia0stat),a
+      92/      7C :                     
+      93/      7C : AF                  	xor	a			; Clr A
+      94/      7D : D3 A1               	out	(acia1stat),a		; Reset 8251 sequence.
+      95/      7F : D3 A1               	out	(acia1stat),a
+      96/      81 : D3 A1               	out	(acia1stat),a
+      97/      83 : 3E 40               	ld	a,40h			; Set 8251 reset flag
+      98/      85 : D3 A1               	out	(acia1stat),a
+      99/      87 : 3E 4E               	ld	a,01001110b		; 1 stopbits, 8 databits and 16Xbaud
+     100/      89 : D3 A1               	out	(acia1stat),a
+     101/      8B : 3E 25               	ld	a,00100101b		; TX and RX enabled
+     102/      8D : D3 A1               	out	(acia1stat),a
+     103/      8F :                     
+     104/      8F :                     clear_memory
+     105/      8F :                     
+     106/      8F : 21 00 20                    ld      hl,2000h
+     107/      92 : 11 FF DF                    ld      de,0dfffh
+     108/      95 : AF                  clmlp   xor     a
+     109/      96 : 77                          ld      (hl),a
+     110/      97 : 23                          inc     hl
+     111/      98 : 1B                          dec     de
+     112/      99 : 7A                          ld      a,d
+     113/      9A : B3                          or      e
+     114/      9B : 20 F8                       jr      nz,clmlp
+     115/      9D : C3 00 01            	jp	0100h
+     116/      A0 :                     
+     117/     100 :                     	org	0100h
+     118/     100 :                     
+     119/     100 : 3E 82               	ld	a,82h			; Set port0 B to input.
+     120/     102 : D3 23               	out	(port0ctl),a		; Set port0 A and C to output.
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 3 - 6/27/2018 6:13:16
+
+
+     121/     104 : D3 63               	out	(port1ctl),a		; Do the same for port1
+     122/     106 : 3E 0C               	ld	a,00001100b		; SPI CS lines set to high
+     123/     108 : D3 80               	out	(sd_port),a
+     124/     10A :                     
+     125/     10A : 31 00 24            	ld	sp,stackbase
+     126/     10D : 21 16 01            	ld	hl,groettekst
+     127/     110 : CD A3 01            	call	sott			; Print greeting text
+     128/     113 : C3 27 02            	jp	monitor
+     129/     116 :                     
+     130/     116 :                     groettekst
+     131/     116 :                     
+     132/     116 : 0C 53 63 72 75 6D   	db	cls,"Scrumpel 2d Z80 monitor version 1.0",cr,lf
+                    70 65 6C 20 32 64 
+                    20 5A 38 30 20 6D 
+                    6F 6E 69 74 6F 72 
+                    20 76 65 72 73 69 
+                    6F 6E 20 31 2E 30 
+                    0D 0A 
+     133/     13C : 28 63 29 20 32 30   	db	"(c) 2018 by PE1GOO.",cr,lf,0
+                    31 38 20 62 79 20 
+                    50 45 31 47 4F 4F 
+                    2E 0D 0A 00 
+     134/     152 :                     
+     135/     152 :                     ;-----------------------------------------------------
+     136/     152 :                     ; Serial output routine for 8251 acia
+     137/     152 :                     
+     138/     152 : F5                  sot	push	af
+     139/     153 : DB 01               lp0	in	a,(acia0stat)
+     140/     155 : CB 47               	bit	0,a
+     141/     157 : 28 FA               	jr	z,lp0
+     142/     159 : F1                  	pop	af
+     143/     15A : D3 00               	out	(acia0data),a
+     144/     15C : C9                  	ret
+     145/     15D :                     
+     146/     15D : 0D 0A 45 73 63 61   esctxt	db	cr,lf,"Escaped.",0
+                    70 65 64 2E 00 
+     147/     168 : 0D 0A 4D 4F 4E 5A   prompt	db	cr,lf,"MONZ80> ",0
+                    38 30 3E 20 00 
+     148/     173 : 20 3A 20 00         alt2	db	" : ",0
+     149/     177 :                     
+     150/     177 : 21 5D 01            escape	ld	hl,esctxt
+     151/     17A : CD A3 01            	call	sott
+     152/     17D : C3 79 02            	jp	return
+     153/     180 :                     
+     154/     180 : DB 01               sinul	in	a,(acia0stat)
+     155/     182 : CB 4F               	bit	1,a
+     156/     184 : 28 FA               	jr	z,sinul
+     157/     186 : DB 00               	in	a,(acia0data)
+     158/     188 : E6 7F               	and	a,7fh
+     159/     18A : FE 1B               	cp	a,esc
+     160/     18C : 28 E9               	jr	z,escape
+     161/     18E : C9                  	ret
+     162/     18F :                     
+     163/     18F : CD 80 01            sin	call	sinul
+     164/     192 : FE 7A               	cp	a,'z'
+     165/     194 : 28 03               	jr	z,conup
+     166/     196 : 38 04               	jr	c,nolc
+     167/     198 : C9                  	ret
+     168/     199 : E6 5F               conup	and	a,05fh
+     169/     19B : C9                  	ret
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 4 - 6/27/2018 6:13:16
+
+
+     170/     19C : FE 61               nolc	cp	a,'a'
+     171/     19E : 28 F9               	jr	z,conup
+     172/     1A0 : 30 F7               	jr	nc,conup
+     173/     1A2 : C9                  	ret
+     174/     1A3 :                     
+     175/     1A3 : 7E                  sott	ld	a,(hl)
+     176/     1A4 : B7                  	or	a
+     177/     1A5 : C8                  	ret	z
+     178/     1A6 : CD 52 01            	call	sot
+     179/     1A9 : 23                  	inc	hl
+     180/     1AA : 18 F7               	jr	sott
+     181/     1AC :                     
+     182/     1AC :                     getnibble
+     183/     1AC :                     
+     184/     1AC : CD 8F 01            	call	sin
+     185/     1AF : FE 30               alnibin	cp	a,'0'
+     186/     1B1 : 38 1A               	jr	c,error
+     187/     1B3 : FE 3A               	cp	a,03ah
+     188/     1B5 : 38 0F               	jr	c,sub0
+     189/     1B7 : FE 41               	cp	a,'A'
+     190/     1B9 : 38 12               	jr	c,error
+     191/     1BB : FE 47               	cp	a,'G'
+     192/     1BD : 30 0E               	jr	nc,error
+     193/     1BF : CD 52 01            	call	sot
+     194/     1C2 : D6 07               	sub	a,7h
+     195/     1C4 : 18 03               	jr	add0
+     196/     1C6 : CD 52 01            sub0	call	sot
+     197/     1C9 : D6 30               add0	sub	a,'0'
+     198/     1CB : B7                  	or	a,a
+     199/     1CC : C9                  	ret
+     200/     1CD : 37                  error	scf
+     201/     1CE : C9                  	ret
+     202/     1CF :                     
+     203/     1CF : CD AC 01            byte_in	call	getnibble
+     204/     1D2 : 38 FB               	jr	c,byte_in
+     205/     1D4 : CB 27               albytin	sla	a
+     206/     1D6 : CB 27               	sla	a
+     207/     1D8 : CB 27               	sla	a
+     208/     1DA : CB 27               	sla	a
+     209/     1DC : 47                  	ld	b,a
+     210/     1DD :                     
+     211/     1DD :                     byte_in1
+     212/     1DD :                     
+     213/     1DD : CD AC 01            	call	getnibble
+     214/     1E0 : 38 FB               	jr	c,byte_in1
+     215/     1E2 : 80                  	add	a,b
+     216/     1E3 : C9                  	ret
+     217/     1E4 :                     
+     218/     1E4 : F5                  word_in	push	af
+     219/     1E5 : CD CF 01            	call	byte_in
+     220/     1E8 : 67                  	ld	h,a
+     221/     1E9 : CD CF 01            	call	byte_in
+     222/     1EC : 6F                  	ld	l,a
+     223/     1ED : F1                  	pop	af
+     224/     1EE : C9                  	ret
+     225/     1EF :                     
+     226/     1EF : 3E 0D               crlf	ld	a,cr
+     227/     1F1 : CD 52 01            	call	sot
+     228/     1F4 : 3E 0A               	ld	a,lf
+     229/     1F6 : C3 52 01            	jp	sot
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 5 - 6/27/2018 6:13:16
+
+
+     230/     1F9 :                     
+     231/     1F9 :                     ; word in HL, AF saved
+     232/     1F9 :                     
+     233/     1F9 : F5                  wordot	push	af
+     234/     1FA : 7C                  	ld	a,h
+     235/     1FB : CD 04 02            	call	bytot
+     236/     1FE : 7D                  	ld	a,l
+     237/     1FF : CD 04 02            	call	bytot
+     238/     202 : F1                  	pop	af
+     239/     203 : C9                  	ret
+     240/     204 :                     
+     241/     204 :                     ; byte in a
+     242/     204 :                     
+     243/     204 : F5                  bytot	push	af
+     244/     205 : F5                  	push	af
+     245/     206 : E6 F0               	and	0f0h
+     246/     208 : 1F                  	rra
+     247/     209 : 1F                  	rra
+     248/     20A : 1F                  	rra
+     249/     20B : 1F                  	rra
+     250/     20C : CD 17 02            	call	nibbleot
+     251/     20F : F1                  	pop	af
+     252/     210 : E6 0F               	and	0fh
+     253/     212 : CD 17 02            	call	nibbleot
+     254/     215 : F1                  	pop	af
+     255/     216 : C9                  	ret
+     256/     217 :                     
+     257/     217 :                     nibbleot
+     258/     217 :                     
+     259/     217 : E6 0F               	and	0fh
+     260/     219 : FE 0A               	cp	0ah
+     261/     21B : 30 05               	jr	nc,outnibbleless
+     262/     21D : C6 30               	add	a,48
+     263/     21F : C3 52 01            	jp	sot
+     264/     222 :                     
+     265/     222 :                     outnibbleless
+     266/     222 :                     
+     267/     222 : C6 37               	add	a,55
+     268/     224 : C3 52 01            	jp	sot
+     269/     227 :                     
+     270/     227 : 21 68 01            monitor	ld	hl,prompt
+     271/     22A : CD A3 01            	call	sott
+     272/     22D :                     
+     273/     22D :                     ;Command interpreter.
+     274/     22D :                     
+     275/     22D : CD 8F 01            cmdlp	call	sin
+     276/     230 : FE 0A               	cp	a,lf
+     277/     232 : 28 F9               	jr	z,cmdlp
+     278/     234 : CD 52 01            	call	sot
+     279/     237 : FE 0D               	cp	a,cr
+     280/     239 : 28 3E               	jr	z,return
+     281/     23B : FE 3F               	cp	a,'?'
+     282/     23D : 20 06               	jr	nz,cmdnxt
+     283/     23F : CD F8 03            	call	help
+     284/     242 : C3 79 02            	jp	return
+     285/     245 : 4F                  cmdnxt	ld	c,a
+     286/     246 : CD 8F 01            	call	sin
+     287/     249 : CD 52 01            	call	sot
+     288/     24C : 47                  	ld	b,a
+     289/     24D : 3E 20               	ld	a,space
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 6 - 6/27/2018 6:13:16
+
+
+     290/     24F : CD 52 01            	call	sot
+     291/     252 : 21 A7 02            	ld	hl,command_table
+     292/     255 : 5E                  cmdlp1	ld	e,(hl)
+     293/     256 : 23                  	inc	hl
+     294/     257 : 56                  	ld	d,(hl)
+     295/     258 : 23                  	inc	hl
+     296/     259 : 7A                  	ld	a,d
+     297/     25A : B3                  	or	a,e
+     298/     25B : 28 16               	jr	z,cerror
+     299/     25D : 79                  	ld	a,c
+     300/     25E : BB                  	cp	a,e
+     301/     25F : 20 0E               	jr	nz,nextc
+     302/     261 : 7A                  	ld	a,d
+     303/     262 : B8                  	cp	a,b
+     304/     263 : 20 0A               	jr	nz,nextc
+     305/     265 : 11 79 02            	ld	de,return
+     306/     268 : D5                  	push	de
+     307/     269 : 4E                  	ld	c,(hl)
+     308/     26A : 23                  	inc	hl
+     309/     26B : 46                  	ld	b,(hl)
+     310/     26C : 60                  	ld	h,b
+     311/     26D : 69                  	ld	l,c
+     312/     26E : E9                  	jp	(hl)
+     313/     26F :                     		
+     314/     26F : 23                  nextc	inc	hl
+     315/     270 : 23                  	inc	hl
+     316/     271 : 18 E2               	jr	cmdlp1
+     317/     273 :                     
+     318/     273 : 21 7F 02            cerror	ld	hl,command_error_text
+     319/     276 : CD A3 01            merror	call	sott
+     320/     279 : 31 00 24            return	ld	sp,stackbase
+     321/     27C : C3 27 02            	jp	monitor
+     322/     27F :                     
+     323/     27F :                     command_error_text
+     324/     27F :                     
+     325/     27F : 20 55 6E 6B 6E 6F   	db	" Unknown command type ? or HE for help.",0
+                    77 6E 20 63 6F 6D 
+                    6D 61 6E 64 20 74 
+                    79 70 65 20 3F 20 
+                    6F 72 20 48 45 20 
+                    66 6F 72 20 68 65 
+                    6C 70 2E 00 
+     326/     2A7 :                     
+     327/     2A7 :                     command_table
+     328/     2A7 :                     
+     329/     2A7 : 41 4D               	db	"AM"
+     330/     2A9 : 1A 04               	dw	alter			;Alter memory command.
+     331/     2AB : 41 50               	db	"AP"
+     332/     2AD : 46 06               	dw	alterport		;Alter ports.
+     333/     2AF : 47 4F               	db	"GO"
+     334/     2B1 : F2 04               	dw	goto			;Goto command.
+     335/     2B3 : 42 43               	db	"BC"
+     336/     2B5 : 40 05               	dw	bootcpm			;Boot CP/M command.
+     337/     2B7 : 54 49               	db	"TI"
+     338/     2B9 : B1 06               	dw	transfer_in		;Intel hex transfer in command.
+     339/     2BB : 54 4F               	db	"TO"
+     340/     2BD : 79 07               	dw	transfer_ot		;Intel hex transfer ot command.
+     341/     2BF : 48 45               	db	"HE"
+     342/     2C1 : F8 03               	dw	help			;Help command.
+     343/     2C3 : 43 53               	db	"CS"
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 7 - 6/27/2018 6:13:16
+
+
+     344/     2C5 : D5 02               	dw	ecls			;Clear screen command.
+     345/     2C7 : 48 44               	db	"HD"
+     346/     2C9 : 5B 08               	dw	hdump			;Hexdump command.
+     347/     2CB : 50 4D               	db	"PM"
+     348/     2CD : 8A 06               	dw	preset_mem		;Preset memory command.
+     349/     2CF : 46 49               	db	"FI"
+     350/     2D1 : F2 07               	dw	snuffel			;Search in memory command.
+     351/     2D3 : 00 00               	dw	0
+     352/     2D5 :                     
+     353/     2D5 : 3E 0C               ecls	ld	a,cls
+     354/     2D7 : C3 52 01            	jp	sot
+     355/     2DA :                     
+     356/     2DA :                     
+     357/     2DA :                     helptext
+     358/     2DA :                     
+     359/     2DA : 0D 0A 54 68 69 73   	db	cr,lf,"This is the Z80-monitor command helpmenu."
+                    20 69 73 20 74 68 
+                    65 20 5A 38 30 2D 
+                    6D 6F 6E 69 74 6F 
+                    72 20 63 6F 6D 6D 
+                    61 6E 64 20 68 65 
+                    6C 70 6D 65 6E 75 
+                    2E 
+     360/     305 : 0D 0A 0A 0A         	db	cr,lf,lf,lf
+     361/     309 : 41 4D 20 3C 41 6C   	db	"AM <Alter Memory>    AP <Alter Port>      GO <Goto>",cr,lf
+                    74 65 72 20 4D 65 
+                    6D 6F 72 79 3E 20 
+                    20 20 20 41 50 20 
+                    3C 41 6C 74 65 72 
+                    20 50 6F 72 74 3E 
+                    20 20 20 20 20 20 
+                    47 4F 20 3C 47 6F 
+                    74 6F 3E 0D 0A 
+     362/     33E : 42 43 20 3C 42 6F   	db	"BC <Boot CP/M>       CS <Clear screen>    TI <Transfer Input>"
+                    6F 74 20 43 50 2F 
+                    4D 3E 20 20 20 20 
+                    20 20 20 43 53 20 
+                    3C 43 6C 65 61 72 
+                    20 73 63 72 65 65 
+                    6E 3E 20 20 20 20 
+                    54 49 20 3C 54 72 
+                    61 6E 73 66 65 72 
+                    20 49 6E 70 75 74 
+                    3E 
+     363/     37B : 0D 0A               	db	cr,lf
+     364/     37D : 54 4F 20 3C 54 72   	db	"TO <Transfer Output> PM <Preset Memory>   HD <Hexdump>",cr,lf
+                    61 6E 73 66 65 72 
+                    20 4F 75 74 70 75 
+                    74 3E 20 50 4D 20 
+                    3C 50 72 65 73 65 
+                    74 20 4D 65 6D 6F 
+                    72 79 3E 20 20 20 
+                    48 44 20 3C 48 65 
+                    78 64 75 6D 70 3E 
+                    0D 0A 
+     365/     3B5 : 46 49 20 3C 46 69   	db	"FI <Find>            HE <Help, this menu>  ? <Help, this menu>"
+                    6E 64 3E 20 20 20 
+                    20 20 20 20 20 20 
+                    20 20 20 48 45 20 
+                    3C 48 65 6C 70 2C 
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 8 - 6/27/2018 6:13:16
+
+
+                    20 74 68 69 73 20 
+                    6D 65 6E 75 3E 20 
+                    20 3F 20 3C 48 65 
+                    6C 70 2C 20 74 68 
+                    69 73 20 6D 65 6E 
+                    75 3E 
+     366/     3F3 : 0D 0A 0A 0A 00      	db	cr,lf,lf,lf,0
+     367/     3F8 :                     
+     368/     3F8 : 3E 0C               help	ld	a,cls
+     369/     3FA : CD 52 01            	call	sot
+     370/     3FD : 21 DA 02            	ld	hl,helptext
+     371/     400 : C3 A3 01            	jp	sott
+     372/     403 :                     
+     373/     403 : E6 7F               asciiot	and	a,7fh
+     374/     405 : FE 7E               	cp	a,7eh
+     375/     407 : 30 04               	jr	nc,otpunt
+     376/     409 : FE 20               	cp	a,space
+     377/     40B : 30 02               	jr	nc,otkar
+     378/     40D : 3E 2E               otpunt	ld	a,'.'
+     379/     40F : C3 52 01            otkar	jp	sot
+     380/     412 :                     
+     381/     412 : CD 52 01            alterg	call	sot
+     382/     415 : 3E 20               	ld	a,space
+     383/     417 : CD 52 01            	call	sot
+     384/     41A :                     
+     385/     41A : CD E4 01            alter	call	word_in
+     386/     41D : CD EF 01            altl0	call	crlf
+     387/     420 : CD F9 01            	call	wordot
+     388/     423 : 3E 20               	ld	a,space
+     389/     425 : CD 52 01            	call	sot
+     390/     428 : 7E                  	ld	a,(hl)
+     391/     429 : F5                  	push	af
+     392/     42A : CD 04 02            	call	bytot
+     393/     42D : 3E 20               	ld	a,space
+     394/     42F : CD 52 01            	call	sot
+     395/     432 : F1                  	pop	af
+     396/     433 : CD 03 04            	call	asciiot
+     397/     436 : E5                  	push	hl
+     398/     437 : 21 73 01            	ld	hl,alt2
+     399/     43A : CD A3 01            	call	sott
+     400/     43D : E1                  	pop	hl
+     401/     43E : CD 8F 01            altla	call	sin
+     402/     441 : FE 0D               	cp	a,cr
+     403/     443 : 28 1B               	jr	z,plus
+     404/     445 : FE 2D               	cp	a,'-'
+     405/     447 : 28 1F               	jr	z,min
+     406/     449 : FE 47               	cp	a,'G'
+     407/     44B : 28 C5               	jr	z,alterg
+     408/     44D : FE 52               alnxt	cp	a,'R'
+     409/     44F : 28 35               	jr	z,relative
+     410/     451 : FE 27               	cp	a,"'"
+     411/     453 : 28 19               	jr	z,txtin
+     412/     455 : CD AF 01            	call	alnibin
+     413/     458 : 38 E4               	jr	c,altla
+     414/     45A : CD D4 01            	call	albytin
+     415/     45D : 77                  	ld	(hl),a
+     416/     45E : 18 05               	jr	plus1
+     417/     460 : 3E 2B               plus	ld	a,'+'
+     418/     462 : CD 52 01            	call	sot
+     419/     465 : 23                  plus1	inc	hl
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 9 - 6/27/2018 6:13:16
+
+
+     420/     466 : 18 B5               	jr	altl0
+     421/     468 : CD 52 01            min	call	sot
+     422/     46B : 2B                  	dec	hl
+     423/     46C : 18 AF               	jr	altl0
+     424/     46E : CD 52 01            txtin	call	sot
+     425/     471 : CD 80 01            txtinl	call	sinul
+     426/     474 : CD 52 01            	call	sot
+     427/     477 : FE 08               	cp	a,08h
+     428/     479 : 20 03               	jr	nz,txtver
+     429/     47B : 2B                  	dec	hl
+     430/     47C : 18 F3               	jr	txtinl
+     431/     47E : FE 27               txtver	cp	a,"'"
+     432/     480 : 28 9B               	jr	z,altl0
+     433/     482 : 77                  	ld	(hl),a
+     434/     483 : 23                  	inc	hl
+     435/     484 : 18 EB               	jr	txtinl
+     436/     486 :                     
+     437/     486 :                     relative
+     438/     486 :                     
+     439/     486 : CD 52 01            	call	sot
+     440/     489 : 22 02 20            	ld	(buffer),hl
+     441/     48C : 3E 20               	ld	a,space
+     442/     48E : CD 52 01            	call	sot
+     443/     491 : CD E4 01            	call	word_in
+     444/     494 : 22 04 20            	ld	(tobuf),hl
+     445/     497 : 3F                  	ccf
+     446/     498 : 2A 04 20            	ld	hl,(tobuf)
+     447/     49B : ED 5B 02 20         	ld	de,(buffer)
+     448/     49F : ED 52               	sbc	hl,de
+     449/     4A1 : 7C                  	ld	a,h
+     450/     4A2 : B7                  	or	a,a
+     451/     4A3 : 28 17               	jr	z,fwrd
+     452/     4A5 : FE FF               	cp	a,0ffh
+     453/     4A7 : 28 0C               	jr	z,back
+     454/     4A9 : 21 D3 04            offerr	ld	hl,offseterr
+     455/     4AC : CD A3 01            	call	sott
+     456/     4AF : 2A 02 20            	ld	hl,(buffer)
+     457/     4B2 : C3 1D 04            	jp	altl0
+     458/     4B5 : 7C                  back	ld	a,h
+     459/     4B6 : B7                  	or	a,a
+     460/     4B7 : F2 A9 04            	jp	p,offerr
+     461/     4BA : 18 05               	jr	oexit
+     462/     4BC : 7C                  fwrd	ld	a,h
+     463/     4BD : B7                  	or	a,a
+     464/     4BE : FA A9 04            	jp	m,offerr
+     465/     4C1 : 7D                  oexit	ld	a,l
+     466/     4C2 : 2A 02 20            	ld	hl,(buffer)
+     467/     4C5 : 77                  	ld	(hl),a
+     468/     4C6 : F5                  	push	af
+     469/     4C7 : 3E 3D               	ld	a,'='
+     470/     4C9 : CD 52 01            	call	sot
+     471/     4CC : F1                  	pop	af
+     472/     4CD : CD 04 02            	call	bytot
+     473/     4D0 : C3 65 04            	jp	plus1
+     474/     4D3 :                     
+     475/     4D3 :                     offseterr
+     476/     4D3 :                     
+     477/     4D3 : 20 52 65 6C 61 74   	db	" Relative offset out of range.",0
+                    69 76 65 20 6F 66 
+                    66 73 65 74 20 6F 
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 10 - 6/27/2018 6:13:16
+
+
+                    75 74 20 6F 66 20 
+                    72 61 6E 67 65 2E 
+                    00 
+     478/     4F2 :                     	
+     479/     4F2 : CD E4 01            goto	call	word_in
+     480/     4F5 : CD 8F 01            	call	sin
+     481/     4F8 : CD EF 01            	call	crlf
+     482/     4FB : 01 79 02            	ld	bc,return
+     483/     4FE : C5                  	push	bc
+     484/     4FF : E9                  	jp	(hl)			; Jump to address in HL
+     485/     500 :                     
+     486/     500 :                     ; Scrumpel's 8255 8 bit IDE interface
+     487/     500 :                     ; PORT1A and PORT1B are used for controlling the CF-card
+     488/     500 :                     ; CS0 IWR IRD RST nc  AD2 AD1 AD0	port1a
+     489/     500 :                     ; DB7 DB6 DB5 DB4 DB3 DB2 DB1 DB0	port1b
+     490/     500 :                     
+     491/     500 :                     ; CF registers via port1a
+     492/     500 :                     
+     493/     500 : =0H                 cf_data		equ	0h
+     494/     500 : =1H                 cf_features	equ	1h
+     495/     500 : =1H                 cf_error	equ	1h
+     496/     500 : =2H                 cf_seccount	equ	2h
+     497/     500 : =3H                 cf_sector	equ	3h
+     498/     500 : =4H                 cf_cyl_low	equ	4h
+     499/     500 : =5H                 cf_cyl_hi	equ	5h
+     500/     500 : =6H                 cf_head		equ	6h
+     501/     500 : =7H                 cf_status	equ	7h
+     502/     500 : =7H                 cf_command	equ	7h
+     503/     500 : =3H                 cf_lba0		equ	3h
+     504/     500 : =4H                 cf_lba1		equ	4h
+     505/     500 : =5H                 cf_lba2		equ	5h
+     506/     500 : =6H                 cf_lba3		equ	6h
+     507/     500 :                     
+     508/     500 :                     ;CF Features
+     509/     500 :                     
+     510/     500 : =1H                 cf_8bit		equ	1
+     511/     500 : =82H                cf_nocache	equ	082h
+     512/     500 :                     
+     513/     500 :                     ;CF Commands
+     514/     500 :                     
+     515/     500 : =20H                cf_read_sec	equ	020h
+     516/     500 : =30H                cf_write_sec	equ	030h
+     517/     500 : =EFH                cf_set_feat	equ	0efh
+     518/     500 :                     
+     519/     500 : =C000H              loadaddr	equ	0c000h	; CP/M load address
+     520/     500 : =20H                numsecs		equ	32	; number of 512 sectors to be loaded
+     521/     500 :                     
+     522/     500 :                     ; macro's for ide-out and ide-in
+     523/     500 :                     
+     524/     500 :                     ideout	macro	adres
+     525/     500 :                     	push	af
+     526/     500 :                     	push	bc
+     527/     500 :                     	ld	b,adres
+     528/     500 :                     	call	idewr
+     529/     500 :                     	pop	bc
+     530/     500 :                     	pop	af
+     531/     500 :                     
+     532/     500 :                     	endm
+     533/     500 :                     
+     534/     500 :                     idein	macro	adres
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 11 - 6/27/2018 6:13:16
+
+
+     535/     500 :                     	push	bc
+     536/     500 :                     	ld	b,adres
+     537/     500 :                     	call	iderd
+     538/     500 :                     	pop	bc
+     539/     500 :                     
+     540/     500 :                     	endm
+     541/     500 :                     
+     542/     500 :                     ; ide bus routines
+     543/     500 :                     
+     544/     500 :                     ;	a=data, b=port adress
+     545/     500 :                     
+     546/     500 : 4F                  idewr	ld	c,a			; Data in C
+     547/     501 : 3E 80               	ld	a,80h			; Databus to write direction
+     548/     503 : D3 63               	out	(port1ctl),a
+     549/     505 : 78                  	ld	a,b			; Address in B
+     550/     506 : D3 60               	out	(port1a),a
+     551/     508 : DB 60               	in	a,(port1a)
+     552/     50A : F6 80               	or	a,10000000b		; CS
+     553/     50C : D3 60               	out	(port1a),a
+     554/     50E : F6 C0               	or	a,11000000b		; CS & WR               
+     555/     510 : D3 60               	out	(port1a),a
+     556/     512 : 47                  	ld	b,a
+     557/     513 : 79                  	ld	a,c
+     558/     514 : D3 61               	out	(port1b),a		; Data on databus
+     559/     516 : 78                  	ld	a,b
+     560/     517 : E6 87               	and	a,10000111b		; CS
+     561/     519 : D3 60               	out	(port1a),a
+     562/     51B : E6 07               	and	a,00000111b             
+     563/     51D : D3 60               	out	(port1a),a
+     564/     51F : C9                  	ret
+     565/     520 :                     
+     566/     520 : 3E 82               iderd	ld	a,82h
+     567/     522 : D3 63               	out	(port1ctl),a
+     568/     524 : 78                  	ld	a,b
+     569/     525 : D3 60               	out	(port1a),a
+     570/     527 : DB 60               	in	a,(port1a)
+     571/     529 : F6 80               	or	a,10000000b		; CS
+     572/     52B : D3 60               	out	(port1a),a
+     573/     52D : F6 A0               	or	a,10100000b		; CS & RD
+     574/     52F : D3 60               	out	(port1a),a
+     575/     531 : DB 61               	in	a,(port1b)
+     576/     533 : 4F                  	ld	c,a
+     577/     534 : DB 60               	in	a,(port1a)
+     578/     536 : E6 87               	and	a,10000111b		; CS
+     579/     538 : D3 60               	out	(port1a),a
+     580/     53A : E6 07               	and	a,00000111b
+     581/     53C : D3 60               	out	(port1a),a
+     582/     53E : 79                  	ld	a,c
+     583/     53F : C9                  	ret
+     584/     540 :                     
+     585/     540 : 21 17 06            bootcpm	ld	hl,cpmtext
+     586/     543 : CD A3 01            	call	sott
+     587/     546 : CD 07 06            	call	cfwait
+     588/     549 : 3E 01               	ld	a,cf_8bit		; Set IDE to be 8bit
+     589/     54B : (MACRO)             	ideout	cf_features
+     589/     54B : F5                          push    af
+     589/     54C : C5                          push    bc
+     589/     54D : 06 01                       ld      b,CF_FEATURES
+     589/     54F : CD 00 05                    call    idewr
+     589/     552 : C1                          pop     bc
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 12 - 6/27/2018 6:13:16
+
+
+     589/     553 : F1                          pop     af
+     589/     554 :                     
+     590/     554 : 3E EF               	ld	a,cf_set_feat
+     591/     556 : (MACRO)             	ideout	cf_command
+     591/     556 : F5                          push    af
+     591/     557 : C5                          push    bc
+     591/     558 : 06 07                       ld      b,CF_COMMAND
+     591/     55A : CD 00 05                    call    idewr
+     591/     55D : C1                          pop     bc
+     591/     55E : F1                          pop     af
+     591/     55F :                     
+     592/     55F :                     
+     593/     55F : CD 07 06            	call	cfwait
+     594/     562 : 3E 82               	ld	a,cf_nocache		; No write cache
+     595/     564 : (MACRO)             	ideout	cf_features
+     595/     564 : F5                          push    af
+     595/     565 : C5                          push    bc
+     595/     566 : 06 01                       ld      b,CF_FEATURES
+     595/     568 : CD 00 05                    call    idewr
+     595/     56B : C1                          pop     bc
+     595/     56C : F1                          pop     af
+     595/     56D :                     
+     596/     56D : 3E EF               	ld	a,cf_set_feat
+     597/     56F : (MACRO)             	ideout	cf_command
+     597/     56F : F5                          push    af
+     597/     570 : C5                          push    bc
+     597/     571 : 06 07                       ld      b,CF_COMMAND
+     597/     573 : CD 00 05                    call    idewr
+     597/     576 : C1                          pop     bc
+     597/     577 : F1                          pop     af
+     597/     578 :                     
+     598/     578 :                     
+     599/     578 : 06 20               	ld	b,numsecs
+     600/     57A : AF                  	xor	a
+     601/     57B : 32 08 20            	ld	(secno),a
+     602/     57E : 21 00 C0            	ld	hl,loadaddr
+     603/     581 : 22 06 20            	ld	(dmaaddr),hl
+     604/     584 :                     
+     605/     584 :                     processectors
+     606/     584 :                     
+     607/     584 : CD 07 06            	call	cfwait
+     608/     587 : 3A 08 20            	ld	a,(secno)
+     609/     58A : (MACRO)             	ideout	cf_lba0
+     609/     58A : F5                          push    af
+     609/     58B : C5                          push    bc
+     609/     58C : 06 03                       ld      b,CF_LBA0
+     609/     58E : CD 00 05                    call    idewr
+     609/     591 : C1                          pop     bc
+     609/     592 : F1                          pop     af
+     609/     593 :                     
+     610/     593 : AF                  	xor	a
+     611/     594 : (MACRO)             	ideout	cf_lba1
+     611/     594 : F5                          push    af
+     611/     595 : C5                          push    bc
+     611/     596 : 06 04                       ld      b,CF_LBA1
+     611/     598 : CD 00 05                    call    idewr
+     611/     59B : C1                          pop     bc
+     611/     59C : F1                          pop     af
+     611/     59D :                     
+     612/     59D : (MACRO)             	ideout	cf_lba2
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 13 - 6/27/2018 6:13:16
+
+
+     612/     59D : F5                          push    af
+     612/     59E : C5                          push    bc
+     612/     59F : 06 05                       ld      b,CF_LBA2
+     612/     5A1 : CD 00 05                    call    idewr
+     612/     5A4 : C1                          pop     bc
+     612/     5A5 : F1                          pop     af
+     612/     5A6 :                     
+     613/     5A6 : 3E E0               	ld	a,0e0h
+     614/     5A8 : (MACRO)             	ideout	cf_lba3
+     614/     5A8 : F5                          push    af
+     614/     5A9 : C5                          push    bc
+     614/     5AA : 06 06                       ld      b,CF_LBA3
+     614/     5AC : CD 00 05                    call    idewr
+     614/     5AF : C1                          pop     bc
+     614/     5B0 : F1                          pop     af
+     614/     5B1 :                     
+     615/     5B1 : 3E 01               	ld	a,1
+     616/     5B3 : (MACRO)             	ideout	cf_seccount
+     616/     5B3 : F5                          push    af
+     616/     5B4 : C5                          push    bc
+     616/     5B5 : 06 02                       ld      b,CF_SECCOUNT
+     616/     5B7 : CD 00 05                    call    idewr
+     616/     5BA : C1                          pop     bc
+     616/     5BB : F1                          pop     af
+     616/     5BC :                     
+     617/     5BC : CD D8 05            	call	read
+     618/     5BF : 11 00 02            	ld	de,0200h
+     619/     5C2 : 2A 06 20            	ld	hl,(dmaaddr)
+     620/     5C5 : 19                  	add	hl,de
+     621/     5C6 : 22 06 20            	ld	(dmaaddr),hl
+     622/     5C9 : 3A 08 20            	ld	a,(secno)
+     623/     5CC : 3C                  	inc	a
+     624/     5CD : 32 08 20            	ld	(secno),a
+     625/     5D0 : 10 B2               	djnz	processectors
+     626/     5D2 :                     
+     627/     5D2 :                     ; Start CP/M using entry at top of BIOS
+     628/     5D2 :                     ; The current active console stream ID is pushed onto the stack
+     629/     5D2 :                     ; to allow the CBIOS to pick it up
+     630/     5D2 :                     ; 0 = ACIA 0, 1 = ACIA 1
+     631/     5D2 :                     
+     632/     5D2 : AF                  	xor	a
+     633/     5D3 : F5                  	push	af
+     634/     5D4 : 2A FE FF            	ld	hl,(0fffeh)
+     635/     5D7 : E9                  	jp	(hl)
+     636/     5D8 :                     
+     637/     5D8 : F5                  read	push	af
+     638/     5D9 : C5                  	push	bc
+     639/     5DA : E5                  	push	hl
+     640/     5DB : CD 07 06            	call	cfwait
+     641/     5DE : 3E 20               	ld	a,cf_read_sec
+     642/     5E0 : (MACRO)             	ideout	cf_command
+     642/     5E0 : F5                          push    af
+     642/     5E1 : C5                          push    bc
+     642/     5E2 : 06 07                       ld      b,CF_COMMAND
+     642/     5E4 : CD 00 05                    call    idewr
+     642/     5E7 : C1                          pop     bc
+     642/     5E8 : F1                          pop     af
+     642/     5E9 :                     
+     643/     5E9 : CD 07 06            	call	cfwait
+     644/     5EC : 0E 04               	ld	c,4
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 14 - 6/27/2018 6:13:16
+
+
+     645/     5EE : 2A 06 20            	ld	hl,(dmaaddr)
+     646/     5F1 : 06 80               rd4secs	ld	b,128
+     647/     5F3 : 00                  rdbyte	nop
+     648/     5F4 : 00                  	nop
+     649/     5F5 : (MACRO)             	idein	cf_data
+     649/     5F5 : C5                          push    bc
+     649/     5F6 : 06 00                       ld      b,CF_DATA
+     649/     5F8 : CD 20 05                    call    iderd
+     649/     5FB : C1                          pop     bc
+     649/     5FC :                     
+     650/     5FC : 77                  	ld	(hl),a
+     651/     5FD : 23                  	inc	hl
+     652/     5FE : 10 F3               	djnz	rdbyte
+     653/     600 : 0D                  	dec	c
+     654/     601 : 20 EE               	jr	nz,rd4secs
+     655/     603 : E1                  	pop	hl
+     656/     604 : C1                  	pop	bc
+     657/     605 : F1                  	pop	af
+     658/     606 : C9                  	ret
+     659/     607 :                     
+     660/     607 :                     ; Wait for disk to be ready (busy=0,ready=1)
+     661/     607 :                     
+     662/     607 : F5                  cfwait	push	af
+     663/     608 : (MACRO)             cfwait1	idein	cf_status
+     663/     608 : C5                          push    bc
+     663/     609 : 06 07                       ld      b,CF_STATUS
+     663/     60B : CD 20 05                    call    iderd
+     663/     60E : C1                          pop     bc
+     663/     60F :                     
+     664/     60F : E6 80               	and	080h
+     665/     611 : FE 80               	cp	080h
+     666/     613 : 28 F3               	jr	z,cfwait1
+     667/     615 : F1                  	pop	af
+     668/     616 : C9                  	ret
+     669/     617 :                     
+     670/     617 : 0D 0A 4C 6F 61 64   cpmtext	db	cr,lf,"Loading CP/M from CF card on IDE0.",cr,lf,0
+                    69 6E 67 20 43 50 
+                    2F 4D 20 66 72 6F 
+                    6D 20 43 46 20 63 
+                    61 72 64 20 6F 6E 
+                    20 49 44 45 30 2E 
+                    0D 0A 00 
+     671/     63E :                     
+     672/     63E : CD 52 01            alprtg	call	sot
+     673/     641 : 3E 20               	ld	a,space
+     674/     643 : CD 52 01            	call	sot
+     675/     646 :                     
+     676/     646 :                     alterport
+     677/     646 :                     
+     678/     646 : CD CF 01            	call	byte_in
+     679/     649 : 4F                  	ld	c,a
+     680/     64A : CD EF 01            altprt1	call	crlf
+     681/     64D : 79                  	ld	a,c
+     682/     64E : CD 04 02            	call	bytot
+     683/     651 : 3E 20               	ld	a,space
+     684/     653 : CD 52 01            	call	sot
+     685/     656 : ED 78               	in	a,(c)
+     686/     658 : CD 04 02            	call	bytot
+     687/     65B : 21 73 01            	ld	hl,alt2
+     688/     65E : CD A3 01            	call	sott
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 15 - 6/27/2018 6:13:16
+
+
+     689/     661 : CD 8F 01            altp1	call	sin
+     690/     664 : FE 0D               	cp	a,cr
+     691/     666 : 28 14               	jr	z,pplus
+     692/     668 : FE 2D               	cp	a,'-'
+     693/     66A : 28 18               	jr	z,pmin
+     694/     66C : FE 47               	cp	a,'G'
+     695/     66E : 28 CE               	jr	z,alprtg
+     696/     670 : CD AF 01            	call	alnibin
+     697/     673 : 38 EC               	jr	c,altp1
+     698/     675 : CD D4 01            	call	albytin
+     699/     678 : ED 79               	out	(c),a
+     700/     67A : 18 05               	jr	pplus1
+     701/     67C : 3E 2B               pplus	ld	a,'+'
+     702/     67E : CD 52 01            	call	sot
+     703/     681 : 0C                  pplus1	inc	c
+     704/     682 : 18 C6               	jr	altprt1
+     705/     684 : CD 52 01            pmin	call	sot
+     706/     687 : 0D                  	dec	c
+     707/     688 : 18 C0               	jr	altprt1
+     708/     68A :                     
+     709/     68A :                     preset_mem
+     710/     68A :                     
+     711/     68A : CD E4 01            	call	word_in
+     712/     68D : E5                  	push	hl
+     713/     68E : 3E 20               	ld	a,space
+     714/     690 : CD 52 01            	call	sot
+     715/     693 : CD E4 01            	call	word_in
+     716/     696 : 22 02 20            	ld	(buffer),hl
+     717/     699 : E1                  	pop	hl
+     718/     69A : 3E 20               	ld	a,space
+     719/     69C : CD 52 01            	call	sot
+     720/     69F : CD CF 01            	call	byte_in
+     721/     6A2 : 77                  presl1	ld	(hl),a
+     722/     6A3 : 23                  	inc	hl
+     723/     6A4 : E5                  	push	hl
+     724/     6A5 : 3F                  	ccf
+     725/     6A6 : ED 5B 02 20         	ld	de,(buffer)
+     726/     6AA : ED 52               	sbc	hl,de
+     727/     6AC : E1                  	pop	hl
+     728/     6AD : 20 F3               	jr	nz,presl1
+     729/     6AF : 77                  	ld	(hl),a
+     730/     6B0 : C9                  	ret
+     731/     6B1 :                     	
+     732/     6B1 :                     transfer_in
+     733/     6B1 :                     
+     734/     6B1 : 21 BA 06            	ld	hl,iloadtxt
+     735/     6B4 : CD A3 01            	call	sott
+     736/     6B7 : C3 E6 06            	jp	transfer_start
+     737/     6BA :                     	              
+     738/     6BA :                     iloadtxt
+     739/     6BA : 0D 0A 52 65 61 64   	db	cr,lf,"Ready for intel-hex transfer",cr,lf,0
+                    79 20 66 6F 72 20 
+                    69 6E 74 65 6C 2D 
+                    68 65 78 20 74 72 
+                    61 6E 73 66 65 72 
+                    0D 0A 00 
+     740/     6DB :                     
+     741/     6DB : C5                  chksum	push	bc
+     742/     6DC : 47                  	ld	b,a
+     743/     6DD : 3A 00 20            	ld	a,(crc)
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 16 - 6/27/2018 6:13:16
+
+
+     744/     6E0 : 80                  	add	a,b
+     745/     6E1 : 32 00 20            	ld	(crc),a
+     746/     6E4 : C1                  	pop	bc
+     747/     6E5 : C9                  	ret
+     748/     6E6 :                     
+     749/     6E6 :                     transfer_start
+     750/     6E6 :                     
+     751/     6E6 : F5                  	push	af
+     752/     6E7 : C5                  	push	bc
+     753/     6E8 : D5                  	push	de
+     754/     6E9 : E5                  	push	hl
+     755/     6EA : CD EF 01            tr_in	call	crlf
+     756/     6ED : CD 8F 01            trl1	call	sin
+     757/     6F0 : FE 3A               	cp	a,':'
+     758/     6F2 : 20 F9               	jr	nz,trl1
+     759/     6F4 : CD 52 01            	call	sot
+     760/     6F7 : CD CF 01            	call	byte_in
+     761/     6FA : FE 00               	cp	a,0h
+     762/     6FC : 28 4C               	jr	z,trend
+     763/     6FE : 32 01 20            	ld	(teller),a
+     764/     701 : F5                  	push	af
+     765/     702 : AF                  	xor	a
+     766/     703 : 32 00 20            	ld	(crc),a
+     767/     706 : F1                  	pop	af
+     768/     707 : CD DB 06            	call	chksum
+     769/     70A : CD CF 01            	call	byte_in
+     770/     70D : 32 03 20            	ld	(buffer+1),a
+     771/     710 : CD DB 06            	call	chksum
+     772/     713 : CD CF 01            	call	byte_in
+     773/     716 : 32 02 20            	ld	(buffer),a
+     774/     719 : CD DB 06            	call	chksum
+     775/     71C : 2A 02 20            	ld	hl,(buffer)
+     776/     71F : CD CF 01            	call	byte_in
+     777/     722 : CD DB 06            	call	chksum
+     778/     725 : CD CF 01            trl0	call	byte_in
+     779/     728 : 77                  	ld	(hl),a
+     780/     729 : CD DB 06            	call	chksum
+     781/     72C : 23                  	inc	hl
+     782/     72D : 3A 01 20            	ld	a,(teller)	
+     783/     730 : 3D                  	dec	a
+     784/     731 : 32 01 20            	ld	(teller),a
+     785/     734 : 20 EF               	jr	nz,trl0
+     786/     736 : CD CF 01            	call	byte_in
+     787/     739 : ED 44               	neg
+     788/     73B : 47                  	ld	b,a
+     789/     73C : 3A 00 20            	ld	a,(crc)
+     790/     73F : B8                  	cp	a,b
+     791/     740 : 28 A8               	jr	z,tr_in
+     792/     742 : 21 56 07            chkerr	ld	hl,errortxt
+     793/     745 : CD A3 01            	call	sott
+     794/     748 : 18 07               	jr	trex
+     795/     74A : CD 8F 01            trend	call	sin
+     796/     74D : FE 0D               	cp	a,cr
+     797/     74F : 20 F9               	jr	nz,trend
+     798/     751 : E1                  trex	pop	hl
+     799/     752 : D1                  	pop	de
+     800/     753 : C1                  	pop	bc
+     801/     754 : F1                  	pop	af
+     802/     755 : C9                  	ret
+     803/     756 :                     
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 17 - 6/27/2018 6:13:16
+
+
+     804/     756 :                     errortxt
+     805/     756 :                     
+     806/     756 : 0D 0A 43 52 43 20   	db	cr,lf,"CRC error in Intel-hex transfer.",0
+                    65 72 72 6F 72 20 
+                    69 6E 20 49 6E 74 
+                    65 6C 2D 68 65 78 
+                    20 74 72 61 6E 73 
+                    66 65 72 2E 00 
+     807/     779 :                     
+     808/     779 :                     transfer_ot
+     809/     779 :                     
+     810/     779 : CD E4 01            	call	word_in
+     811/     77C : E5                  	push	hl
+     812/     77D : 3E 20               	ld	a,space
+     813/     77F : CD 52 01            	call	sot
+     814/     782 : CD E4 01            	call	word_in
+     815/     785 : 22 04 20            	ld	(tobuf),hl
+     816/     788 : E1                  	pop	hl
+     817/     789 : AF                  tril1	xor	a
+     818/     78A : 32 00 20            	ld	(crc),a
+     819/     78D : CD EF 01            	call	crlf
+     820/     790 : 22 02 20            	ld	(buffer),hl
+     821/     793 : 3E 3A               	ld	a,':'
+     822/     795 : CD 52 01            	call	sot
+     823/     798 : 3E 10               	ld	a,010h
+     824/     79A : 47                  	ld	b,a
+     825/     79B : CD 04 02            	call	bytot
+     826/     79E : CD DB 06            	call	chksum
+     827/     7A1 : 3A 03 20            	ld	a,(buffer+1)
+     828/     7A4 : CD 04 02            	call	bytot
+     829/     7A7 : CD DB 06            	call	chksum
+     830/     7AA : 3A 02 20            	ld	a,(buffer)
+     831/     7AD : CD 04 02            	call	bytot
+     832/     7B0 : CD DB 06            	call	chksum
+     833/     7B3 : AF                  	xor	a
+     834/     7B4 : CD 04 02            	call	bytot
+     835/     7B7 : CD DB 06            	call	chksum
+     836/     7BA : 7E                  tril0	ld	a,(hl)
+     837/     7BB : CD 04 02            	call	bytot
+     838/     7BE : CD DB 06            	call	chksum
+     839/     7C1 : 23                  	inc	hl
+     840/     7C2 : 10 F6               	djnz	tril0
+     841/     7C4 : 3A 00 20            	ld	a,(crc)
+     842/     7C7 : ED 44               	neg
+     843/     7C9 : CD 04 02            	call	bytot
+     844/     7CC : E5                  	push	hl
+     845/     7CD : 2A 04 20            	ld	hl,(tobuf)
+     846/     7D0 : 2B                  	dec	hl
+     847/     7D1 : 7D                  	ld	a,l
+     848/     7D2 : B4                  	or	a,h
+     849/     7D3 : 28 06               	jr	z,trend1
+     850/     7D5 : 22 04 20            	ld	(tobuf),hl
+     851/     7D8 : E1                  	pop	hl
+     852/     7D9 : 18 AE               	jr	tril1
+     853/     7DB : E1                  trend1	pop	hl
+     854/     7DC : 21 E2 07            	ld	hl,trendt
+     855/     7DF : C3 A3 01            	jp	sott
+     856/     7E2 :                     
+     857/     7E2 : 0D 0A 3A 30 30 30   trendt	db	cr,lf,":00000001FF",cr,lf,0
+                    30 30 30 30 31 46 
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 18 - 6/27/2018 6:13:16
+
+
+                    46 0D 0A 00 
+     858/     7F2 :                     
+     859/     7F2 : CD E4 01            snuffel	call	word_in
+     860/     7F5 : E5                  	push	hl
+     861/     7F6 : 3E 20               	ld	a,space
+     862/     7F8 : CD 52 01            	call	sot
+     863/     7FB : CD E4 01            	call	word_in
+     864/     7FE : 22 04 20            	ld	(tobuf),hl
+     865/     801 : E1                  	pop	hl
+     866/     802 : 3E 20               	ld	a,space
+     867/     804 : CD 52 01            	call	sot
+     868/     807 : CD CF 01            	call	byte_in
+     869/     80A :                     
+     870/     80A :                     snuffel_verder
+     871/     80A :                     
+     872/     80A : E5                  	push	hl
+     873/     80B : ED 5B 04 20         	ld	de,(tobuf)
+     874/     80F : 3F                  	ccf
+     875/     810 : ED 52               	sbc	hl,de
+     876/     812 : E1                  	pop	hl
+     877/     813 : 28 11               	jr	z,snuffel_niet_gevonden
+     878/     815 : 46                  	ld	b,(hl)
+     879/     816 : 23                  	inc 	hl
+     880/     817 : B8                  	cp	a,b
+     881/     818 : 20 F0               	jr	nz,snuffel_verder
+     882/     81A : E5                  	push	hl
+     883/     81B : 21 2C 08            	ld	hl,snuffel_gevonden_text
+     884/     81E : CD A3 01            	call	sott
+     885/     821 : E1                  	pop	hl
+     886/     822 : 2B                  	dec	hl
+     887/     823 : C3 F9 01            	jp	wordot
+     888/     826 :                     
+     889/     826 :                     snuffel_niet_gevonden
+     890/     826 :                     
+     891/     826 : 21 39 08            	ld	hl,snuffel_niet_gevonden_text
+     892/     829 : C3 A3 01            	jp	sott
+     893/     82C :                     
+     894/     82C :                     snuffel_gevonden_text
+     895/     82C :                     
+     896/     82C : 20 66 6F 75 6E 64   	db	" found at : ",0
+                    20 61 74 20 3A 20 
+                    00 
+     897/     839 :                     
+     898/     839 :                     snuffel_niet_gevonden_text
+     899/     839 :                     
+     900/     839 : 20 6E 6F 74 20 66   	db	" not found in given memory block.",0
+                    6F 75 6E 64 20 69 
+                    6E 20 67 69 76 65 
+                    6E 20 6D 65 6D 6F 
+                    72 79 20 62 6C 6F 
+                    63 6B 2E 00 
+     901/     85B :                     
+     902/     85B : CD E4 01            hdump	call	word_in
+     903/     85E : CD EF 01            hloop	call	crlf
+     904/     861 : E5                  	push	hl
+     905/     862 : CD F9 01            	call	wordot
+     906/     865 : 3E 20               	ld	a,space
+     907/     867 : CD 52 01            	call	sot
+     908/     86A : 06 08               	ld	b,8
+     909/     86C : 3E 20               hloop1	ld	a,space
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 19 - 6/27/2018 6:13:16
+
+
+     910/     86E : CD 52 01            	call	sot
+     911/     871 : 7E                  	ld	a,(hl)
+     912/     872 : CD 04 02            	call	bytot
+     913/     875 : 23                  	inc	hl
+     914/     876 : 7E                  	ld	a,(hl)
+     915/     877 : CD 04 02            	call	bytot
+     916/     87A : 23                  	inc	hl
+     917/     87B : 10 EF               	djnz	hloop1
+     918/     87D : E1                  	pop	hl
+     919/     87E : 3E 20               	ld	a,space
+     920/     880 : CD 52 01            	call	sot
+     921/     883 : 06 10               	ld	b,010h
+     922/     885 : 7E                  hloop2	ld	a,(hl)
+     923/     886 : CD 03 04            	call	asciiot
+     924/     889 : 23                  	inc	hl
+     925/     88A : 10 F9               	djnz	hloop2
+     926/     88C : DB 01               	in	a,(acia0stat)
+     927/     88E : CB 4F               	bit	1,a
+     928/     890 : 28 CC               	jr	z,hloop
+     929/     892 : DB 00               	in	a,(acia0data)
+     930/     894 : C9                  	ret
+     931/     895 :                     
+     932/     895 :                     	end
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 20 - 6/27/2018 6:13:16
+
+
+  symbol table (* = unused):
+  ------------------------
+
+ ACIA0DATA :                      0 - |  ACIA0STAT :                      1 - |
+*ACIA1DATA :                     A0 - |  ACIA1STAT :                     A1 - |
+ ADD0 :                         1C9 C |  ALBYTIN :                      1D4 C |
+ ALNIBIN :                      1AF C | *ALNXT :                        44D C |
+ ALPRTG :                       63E C |  ALT2 :                         173 C |
+ ALTER :                        41A C |  ALTERG :                       412 C |
+ ALTERPORT :                    646 C |  ALTL0 :                        41D C |
+ ALTLA :                        43E C |  ALTP1 :                        661 C |
+ ALTPRT1 :                      64A C |
+*ARCHITECTURE :                                        x86_64-unknown-linux - |
+ ASCIIOT :                      403 C |  BACK :                         4B5 C |
+*BIGENDIAN :                      0 - |  BOOTCPM :                      540 C |
+*BRANCHEXT :                      0 - | *BS :                             8 - |
+ BUFFER :                      2002 - |  BYTE_IN :                      1CF C |
+ BYTE_IN1 :                     1DD C |  BYTOT :                        204 C |
+*CASESENSITIVE :                  0 - |  CERROR :                       273 C |
+ CFWAIT :                       607 C |  CFWAIT1 :                      608 C |
+ CF_8BIT :                        1 - |  CF_COMMAND :                     7 - |
+*CF_CYL_HI :                      5 - | *CF_CYL_LOW :                     4 - |
+ CF_DATA :                        0 - | *CF_ERROR :                       1 - |
+ CF_FEATURES :                    1 - | *CF_HEAD :                        6 - |
+ CF_LBA0 :                        3 - |  CF_LBA1 :                        4 - |
+ CF_LBA2 :                        5 - |  CF_LBA3 :                        6 - |
+ CF_NOCACHE :                    82 - |  CF_READ_SEC :                   20 - |
+ CF_SECCOUNT :                    2 - | *CF_SECTOR :                      3 - |
+ CF_SET_FEAT :                   EF - |  CF_STATUS :                      7 - |
+*CF_WRITE_SEC :                  30 - | *CHKERR :                       742 C |
+ CHKSUM :                       6DB C | *CLEAR_MEMORY :                  8F C |
+ CLMLP :                         95 C |  CLS :                            C - |
+ CMDLP :                        22D C |  CMDLP1 :                       255 C |
+ CMDNXT :                       245 C |  COMMAND_ERROR_TEXT :           27F C |
+ COMMAND_TABLE :                2A7 C | *CONSTPI :        3.141592653589793 - |
+ CONUP :                        199 C |  CPMTEXT :                      617 C |
+ CR :                             D - |  CRC :                         2000 - |
+ CRLF :                         1EF C | *DATE :                   6/27/2018 - |
+ DMAADDR :                     2006 - |  ECLS :                         2D5 C |
+ ERROR :                        1CD C |  ERRORTXT :                     756 C |
+ ESC :                           1B - |  ESCAPE :                       177 C |
+ ESCTXT :                       15D C | *FALSE :                          0 - |
+*FULLPMMU :                       1 - |  FWRD :                         4BC C |
+ GETNIBBLE :                    1AC C |  GOTO :                         4F2 C |
+ GROETTEKST :                   116 C | *HAS64 :                          1 - |
+*HASDSP :                         0 - | *HASFPU :                         0 - |
+*HASPMMU :                        0 - |  HDUMP :                        85B C |
+ HELP :                         3F8 C |  HELPTEXT :                     2DA C |
+ HLOOP :                        85E C |  HLOOP1 :                       86C C |
+ HLOOP2 :                       885 C |  IDERD :                        520 C |
+ IDEWR :                        500 C |  ILOADTXT :                     6BA C |
+*INEXTMODE :                      0 - |  INIT :                          69 C |
+*INLWORDMODE :                    0 - | *INMAXMODE :                      0 - |
+*INSRCMODE :                      0 - | *INSUPMODE :                      0 - |
+ LF :                             A - | *LISTON :                         1 - |
+ LOADADDR :                    C000 - |  LP0 :                          153 C |
+*MACEXP :                         1 - |  MEMBEGIN :                    2000 - |
+*MERROR :                       276 C |  MIN :                          468 C |
+*MOMCPU :                        80 - | *MOMCPUNAME :                   Z80 - |
+ MONITOR :                      227 C | *NESTMAX :                      100 - |
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 21 - 6/27/2018 6:13:16
+
+
+ NEXTC :                        26F C |  NIBBLEOT :                     217 C |
+ NOLC :                         19C C |  NUMSECS :                       20 - |
+ OEXIT :                        4C1 C |  OFFERR :                       4A9 C |
+ OFFSETERR :                    4D3 C |  OTKAR :                        40F C |
+ OTPUNT :                       40D C |  OUTNIBBLELESS :                222 C |
+*PACKING :                        0 - | *PADDING :                        1 - |
+ PLUS :                         460 C |  PLUS1 :                        465 C |
+ PMIN :                         684 C | *PORT0A :                        20 - |
+*PORT0B :                        21 - | *PORT0C :                        22 - |
+ PORT0CTL :                      23 - |  PORT1A :                        60 - |
+ PORT1B :                        61 - | *PORT1C :                        62 - |
+ PORT1CTL :                      63 - |  PPLUS :                        67C C |
+ PPLUS1 :                       681 C |  PRESET_MEM :                   68A C |
+ PRESL1 :                       6A2 C |  PROCESSECTORS :                584 C |
+ PROMPT :                       168 C |  RD4SECS :                      5F1 C |
+ RDBYTE :                       5F3 C |  READ :                         5D8 C |
+ RELATIVE :                     486 C | *RELAXED :                        0 - |
+ RETURN :                       279 C | *ROMDIS :                        40 - |
+*RST00 :                          0 C | *RST08 :                          8 C |
+*RST10 :                         10 C | *RST18 :                         18 C |
+ SD_PORT :                       80 - |  SECNO :                       2008 - |
+ SIN :                          18F C |  SINUL :                        180 C |
+ SNUFFEL :                      7F2 C |  SNUFFEL_GEVONDEN_TEXT :        82C C |
+ SNUFFEL_NIET_GEVONDEN :        826 C |  SNUFFEL_NIET_GEVONDEN_TEXT :   839 C |
+ SNUFFEL_VERDER :               80A C |  SOT :                          152 C |
+ SOTT :                         1A3 C |  SPACE :                         20 - |
+ STACKBASE :                   2400 - |  SUB0 :                         1C6 C |
+ TELLER :                      2001 - | *TIME :                     6:13:16 - |
+ TOBUF :                       2004 - |  TRANSFER_IN :                  6B1 C |
+ TRANSFER_OT :                  779 C |  TRANSFER_START :               6E6 C |
+ TREND :                        74A C |  TREND1 :                       7DB C |
+ TRENDT :                       7E2 C |  TREX :                         751 C |
+ TRIL0 :                        7BA C |  TRIL1 :                        789 C |
+ TRL0 :                         725 C |  TRL1 :                         6ED C |
+*TRUE :                           1 - |  TR_IN :                        6EA C |
+ TXTIN :                        46E C |  TXTINL :                       471 C |
+ TXTVER :                       47E C | *VERSION :                     142F - |
+ WORDOT :                       1F9 C |  WORD_IN :                      1E4 C |
+
+    188 symbols
+     49 unused symbols
+
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 22 - 6/27/2018 6:13:16
+
+
+  defined macros:
+  ---------------
+
+IDEIN                                 | IDEOUT                               
+
+      2 macros
+
+ AS V1.42 Beta [Bld 115] - source file monz80r.asm - page 23 - 6/27/2018 6:13:16
+
+
+  codepages:
+  ----------
+
+STANDARD (0 changed characters)
+
+
+0.01 seconds assembly time
+
+    933 lines source file
+   1013 lines incl. macro expansions
+      2 passes
+      0 errors
+      0 warnings
