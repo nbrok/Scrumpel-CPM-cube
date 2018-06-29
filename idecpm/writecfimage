@@ -1,0 +1,5 @@
+#!/bin/bash
+sudo dd if=imageC000.img of=/dev/sdc
+
+sync
+sync

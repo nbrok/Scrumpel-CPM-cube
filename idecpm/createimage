@@ -1,0 +1,3 @@
+echo "D600-D632 may ovarlap, that's ok"
+cat cpm22.hex  cbios128.hex | ./mload.tcl > image.tmp
+tail -c 16384 image.tmp > imageC000.img

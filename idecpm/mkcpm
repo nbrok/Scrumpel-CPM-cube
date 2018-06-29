@@ -1,0 +1,6 @@
+#!/bin/bash
+asl -L cpm22.asm
+asl -L cbios128.asm
+p2ihex cpm22.p
+p2ihex cbios128.p
+./createimage

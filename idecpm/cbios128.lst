@@ -1,0 +1,1463 @@
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 1 - 2/13/2018 8:47:39
+
+
+       1/       0 :                     	cpu	z80
+       2/       0 :                     ;==============================================================================
+       3/       0 :                     ; Contents of this file are copyright Grant Searle
+       4/       0 :                     ; Blocking/unblocking routines are the published version by Digital Research
+       5/       0 :                     ; (bugfixed, as found on the web)
+       6/       0 :                     ;
+       7/       0 :                     ; You have permission to use this for NON COMMERCIAL USE ONLY
+       8/       0 :                     ; If you wish to use it elsewhere, please include an acknowledgement to myself.
+       9/       0 :                     ;
+      10/       0 :                     ; http://searle.hostei.com/grant/index.html
+      11/       0 :                     ;
+      12/       0 :                     ; eMail: home.micros01@btinternet.com
+      13/       0 :                     ;
+      14/       0 :                     ; If the above don't work, please perform an Internet search to see if I have
+      15/       0 :                     ; updated the web page hosting service.
+      16/       0 :                     ; Patched for scrumep2d aka Scrumpel CP/M cube Nick Brok
+      17/       0 :                     ;==============================================================================
+      18/       0 :                     
+      19/       0 : =C000H              ccp		EQU	0C000h		; Base of CCP.
+      20/       0 : =C806H              bdos		EQU	ccp + 0806h	; Base of BDOS.
+      21/       0 : =D600H              bios		EQU	ccp + 1600h	; Base of BIOS.
+      22/       0 :                     
+      23/       0 :                     ; Set CP/M low memory datA, vector and buffer addresses.
+      24/       0 :                     
+      25/       0 : =3H                 iobyte		EQU	03h		; Intel standard I/O definition byte.
+      26/       0 : =4H                 userdrv		EQU	04h		; Current user number and drive.
+      27/       0 : =80H                tpabuf		EQU	80h		; Default I/O buffer and command line storage.
+      28/       0 :                     
+      29/       0 : =1H                 acia0stat	equ	01h
+      30/       0 : =2H                 acia0data	equ	02h
+      31/       0 : =A1H                acia1stat	equ	0a1h
+      32/       0 : =A0H                acia1data	equ	0a0h
+      33/       0 :                     
+      34/       0 :                     ; IDE interface
+      35/       0 :                     ; PORT1A and PORT1B are used for controlling the CF-card
+      36/       0 :                     ; CS0 IWR IRD RST nc  AD2 AD1 AD0	port1a
+      37/       0 :                     ; DB7 DB6 DB5 DB4 DB3 DB2 DB1 DB0	port1b
+      38/       0 :                     
+      39/       0 : =60H                port1a		equ	060h
+      40/       0 : =61H                port1b		equ	061h
+      41/       0 : =62H                port1c		equ	062h
+      42/       0 : =63H                port1ctl	equ	063h
+      43/       0 :                     
+      44/       0 : =38H                int38		EQU	38H
+      45/       0 : =66H                nmi		EQU	66H
+      46/       0 :                     
+      47/       0 : =1000H              blksiz		equ	4096		;CP/M allocation size
+      48/       0 : =200H               hstsiz		equ	512		;host disk sector size
+      49/       0 : =20H                hstspt		equ	32		;host disk sectors/trk
+      50/       0 : =4H                 hstblk		equ	hstsiz/128	;CP/M sects/host buff
+      51/       0 : =80H                cpmspt		equ	hstblk * hstspt	;CP/M sectors/track
+      52/       0 : =3H                 secmsk		equ	hstblk-1	;sector mask
+      53/       0 :                     					;compute sector mask
+      54/       0 :                     ;secshf		.equ	2		;log2(hstblk)
+      55/       0 :                     
+      56/       0 : =0H                 wrall		equ	0		;write to allocated
+      57/       0 : =1H                 wrdir		equ	1		;write to directory
+      58/       0 : =2H                 wrual		equ	2		;write to unallocated
+      59/       0 :                     
+      60/       0 :                     
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 2 - 2/13/2018 8:47:39
+
+
+      61/       0 :                     
+      62/       0 :                     ; CF registers via port1a
+      63/       0 :                     
+      64/       0 : =0H                 CF_DATA		EQU	0h
+      65/       0 : =1H                 CF_FEATURES	EQU	1h
+      66/       0 : =1H                 CF_ERROR	EQU	1h
+      67/       0 : =2H                 CF_SECCOUNT	EQU	2h
+      68/       0 : =3H                 CF_SECTOR	EQU	3h
+      69/       0 : =4H                 CF_CYL_LOW	EQU	4h
+      70/       0 : =5H                 CF_CYL_HI	EQU	5h
+      71/       0 : =6H                 CF_HEAD		EQU	6h
+      72/       0 : =7H                 CF_STATUS	EQU	7h
+      73/       0 : =7H                 CF_COMMAND	EQU	7h
+      74/       0 : =3H                 CF_LBA0		EQU	3h
+      75/       0 : =4H                 CF_LBA1		EQU	4h
+      76/       0 : =5H                 CF_LBA2		EQU	5h
+      77/       0 : =6H                 CF_LBA3		EQU	6h
+      78/       0 :                     
+      79/       0 :                     ;CF Features
+      80/       0 :                     
+      81/       0 : =1H                 CF_8BIT		EQU	1
+      82/       0 : =82H                CF_NOCACHE	EQU	082H
+      83/       0 :                     
+      84/       0 :                     ;CF Commands
+      85/       0 :                     
+      86/       0 : =20H                CF_READ_SEC	EQU	020H
+      87/       0 : =30H                CF_WRITE_SEC	EQU	030H
+      88/       0 : =EFH                CF_SET_FEAT	EQU 	0EFH
+      89/       0 :                     
+      90/       0 : =AH                 LF		EQU	0AH		;line feed
+      91/       0 : =CH                 FF		EQU	0CH		;form feed
+      92/       0 : =DH                 CR		EQU	0DH		;carriage RETurn
+      93/       0 :                     
+      94/       0 :                     ; macro's for ide-out and ide-in
+      95/       0 :                     
+      96/       0 :                     ideout	macro	adres
+      97/       0 :                     	push	af
+      98/       0 :                     	push	bc
+      99/       0 :                     	ld	b,adres
+     100/       0 :                     	call	idewr
+     101/       0 :                     	pop	bc
+     102/       0 :                     	pop	af
+     103/       0 :                     
+     104/       0 :                     	endm
+     105/       0 :                     
+     106/       0 :                     idein	macro	adres
+     107/       0 :                     	push	bc
+     108/       0 :                     	ld	b,adres
+     109/       0 :                     	call	iderd
+     110/       0 :                     	pop	bc
+     111/       0 :                     
+     112/       0 :                     	endm
+     113/       0 :                     
+     114/       0 :                     ;==============================================================================
+     115/       0 :                     
+     116/    D600 :                     	org	bios		; BIOS origin.
+     117/    D600 :                     
+     118/    D600 :                     ;==============================================================================
+     119/    D600 :                     ; BIOS jump table.
+     120/    D600 :                     ;==============================================================================
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 3 - 2/13/2018 8:47:39
+
+
+     121/    D600 :                     
+     122/    D600 : C3 60 D7            	jp	boot		;  0 Initialize.
+     123/    D603 : C3 07 D8            wboote	jp	wboot		;  1 Warm boot.
+     124/    D606 : C3 B4 D8            	jp	const		;  2 Console status.
+     125/    D609 : C3 F2 D8            	jp	conin		;  3 Console input.
+     126/    D60C : C3 2F D9            	jp	conout		;  4 Console OUTput.
+     127/    D60F : C3 17 D9            	jp	list		;  5 List OUTput.
+     128/    D612 : C3 23 D9            	jp	punch		;  6 punch OUTput.
+     129/    D615 : C3 E5 D8            	jp	reader		;  7 Reader input.
+     130/    D618 : C3 7E D9            	jp	home		;  8 Home disk.
+     131/    D61B : C3 56 D9            	jp	seldsk		;  9 Select disk.
+     132/    D61E : C3 8A D9            	jp	settrk		; 10 Select track.
+     133/    D621 : C3 8F D9            	jp	setsec		; 11 Select sector.
+     134/    D624 : C3 94 D9            	jp	setdma		; 12 Set DMA ADDress.
+     135/    D627 : C3 9C D9            	jp	read		; 13 Read 128 bytes.
+     136/    D62A : C3 B0 D9            	jp	write		; 14 Write 128 bytes.
+     137/    D62D : C3 53 D9            	jp	listst		; 15 List status.
+     138/    D630 : C3 99 D9            	jp	sectran		; 16 Sector translate.
+     139/    D633 :                     
+     140/    D633 :                     ;==============================================================================
+     141/    D633 :                     ; Disk parameter headers for disk 0 to 15
+     142/    D633 :                     ;==============================================================================
+     143/    D633 : 00 00 00 00 00 00   dpbase 	DW 0000h,0000h,0000h,0000h,dirbuf,dpb0,0000h,alv00
+                    00 00 E0 DB 33 D7 
+                    00 00 60 DC 
+     144/    D643 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv01
+                    00 00 E0 DB 42 D7 
+                    00 00 61 DD 
+     145/    D653 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv02
+                    00 00 E0 DB 42 D7 
+                    00 00 62 DE 
+     146/    D663 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv03
+                    00 00 E0 DB 42 D7 
+                    00 00 63 DF 
+     147/    D673 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv04
+                    00 00 E0 DB 42 D7 
+                    00 00 64 E0 
+     148/    D683 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv05
+                    00 00 E0 DB 42 D7 
+                    00 00 65 E1 
+     149/    D693 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv06
+                    00 00 E0 DB 42 D7 
+                    00 00 66 E2 
+     150/    D6A3 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv07
+                    00 00 E0 DB 42 D7 
+                    00 00 67 E3 
+     151/    D6B3 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv08
+                    00 00 E0 DB 42 D7 
+                    00 00 68 E4 
+     152/    D6C3 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv09
+                    00 00 E0 DB 42 D7 
+                    00 00 69 E5 
+     153/    D6D3 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv10
+                    00 00 E0 DB 42 D7 
+                    00 00 6A E6 
+     154/    D6E3 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv11
+                    00 00 E0 DB 42 D7 
+                    00 00 6B E7 
+     155/    D6F3 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv12
+                    00 00 E0 DB 42 D7 
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 4 - 2/13/2018 8:47:39
+
+
+                    00 00 6C E8 
+     156/    D703 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv13
+                    00 00 E0 DB 42 D7 
+                    00 00 6D E9 
+     157/    D713 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpb,0000h,alv14
+                    00 00 E0 DB 42 D7 
+                    00 00 6E EA 
+     158/    D723 : 00 00 00 00 00 00    	DW 0000h,0000h,0000h,0000h,dirbuf,dpbLast,0000h,alv15
+                    00 00 E0 DB 51 D7 
+                    00 00 6F EB 
+     159/    D733 :                     
+     160/    D733 :                     ; First drive has a reserved track for CP/M
+     161/    D733 : 80 00               dpb0	DW 128	;SPT - sectors per track
+     162/    D735 : 05                  	DB 5	;BSH - block shift factor
+     163/    D736 : 1F                  	DB 31	;BLM - block mask
+     164/    D737 : 01                  	DB 1	;EXM - Extent mask
+     165/    D738 : FB 07               	DW 2043	; (2047-4) DSM - Storage size (blocks - 1)
+     166/    D73A : FF 01               	DW 511	;DRM - Number of directory entries - 1
+     167/    D73C : F0                  	DB 240	;AL0 - 1 bit set per directory block
+     168/    D73D : 00                  	DB 0	;AL1 -            "
+     169/    D73E : 00 00               	DW 0	;CKS - DIR check vector size (DRM+1)/4 (0=fixed disk)
+     170/    D740 : 01 00               	DW 1	;OFF - Reserved tracks
+     171/    D742 :                     
+     172/    D742 : 80 00               dpb	DW 128	;SPT - sectors per track
+     173/    D744 : 05                  	DB 5	;BSH - block shift factor
+     174/    D745 : 1F                  	DB 31	;BLM - block mask
+     175/    D746 : 01                  	DB 1	;EXM - Extent mask
+     176/    D747 : FF 07               	DW 2047	;DSM - Storage size (blocks - 1)
+     177/    D749 : FF 01               	DW 511	;DRM - Number of directory entries - 1
+     178/    D74B : F0                  	DB 240	;AL0 - 1 bit set per directory block
+     179/    D74C : 00                  	DB 0	;AL1 -            "
+     180/    D74D : 00 00               	DW 0	;CKS - DIR check vector size (DRM+1)/4 (0=fixed disk)
+     181/    D74F : 00 00               	DW 0	;OFF - Reserved tracks
+     182/    D751 :                     
+     183/    D751 :                     ; Last drive is smaller because CF is never full 64MB or 128MB
+     184/    D751 :                     dpbLast
+     185/    D751 : 80 00               	DW 128	;SPT - sectors per track
+     186/    D753 : 05                  	DB 5	;BSH - block shift factor
+     187/    D754 : 1F                  	DB 31	;BLM - block mask
+     188/    D755 : 01                  	DB 1	;EXM - Extent mask
+     189/    D756 : FF 01               	DW 511	;DSM - Storage size (blocks - 1)  ; 511 = 2MB
+     190/    D758 :                     		;(for 128MB card), 1279 = 5MB (for 64MB card)
+     191/    D758 : FF 01               	DW 511	;DRM - Number of directory entries - 1
+     192/    D75A : F0                  	DB 240	;AL0 - 1 bit set per directory block
+     193/    D75B : 00                  	DB 0	;AL1 -            "
+     194/    D75C : 00 00               	DW 0	;CKS - DIR check vector size (DRM+1)/4 (0=fixed disk)
+     195/    D75E : 00 00               	DW 0	;OFF - Reserved tracks
+     196/    D760 :                     
+     197/    D760 :                     ;==============================================================================
+     198/    D760 :                     ; Cold boot
+     199/    D760 :                     ;==============================================================================
+     200/    D760 :                     
+     201/    D760 : F3                  boot	di				; Disable interrupts.
+     202/    D761 : 31 94 EC            	ld	sp,biosstack		; Set default stack.
+     203/    D764 :                     
+     204/    D764 :                     ;	Turn off ROM
+     205/    D764 :                     
+     206/    D764 : AF                  	xor	a
+     207/    D765 : D3 40               	out	(040h),a
+     208/    D767 :                     
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 5 - 2/13/2018 8:47:39
+
+
+     209/    D767 :                     ;	Initialise SIO already done in ROM
+     210/    D767 :                     
+     211/    D767 :                     
+     212/    D767 : CD CC DB            	call	printInline
+     213/    D76A : 0C                  	db ff
+     214/    D76B : 5A 38 30 20 43 50   	db "Z80 CP/M BIOS 1.0 by G. Searle 2007-18/PE1GOO"
+                    2F 4D 20 42 49 4F 
+                    53 20 31 2E 30 20 
+                    62 79 20 47 2E 20 
+                    53 65 61 72 6C 65 
+                    20 32 30 30 37 2D 
+                    31 38 2F 50 45 31 
+                    47 4F 4F 
+     215/    D798 : 0D 0A               	db cr,lf
+     216/    D79A : 0D 0A               	db cr,lf
+     217/    D79C : 43 50 2F 4D 20 32   	db "CP/M 2.2 "
+                    2E 32 20 
+     218/    D7A5 : 43 6F 70 79 72 69   	db	"Copyright"
+                    67 68 74 
+     219/    D7AE : 20 31 39 37 39 20   	dB	" 1979 (c) by Digital Research"
+                    28 63 29 20 62 79 
+                    20 44 69 67 69 74 
+                    61 6C 20 52 65 73 
+                    65 61 72 63 68 
+     220/    D7CB : 0D 0A 00            	db cr,lf,0
+     221/    D7CE :                     
+     222/    D7CE :                     
+     223/    D7CE : CD BC DB            	call	cfWait
+     224/    D7D1 : 3E 01               	ld 	a,CF_8BIT	; Set IDE to be 8bit
+     225/    D7D3 : (MACRO)             	ideout	CF_FEATURES
+     225/    D7D3 : F5                          push    af
+     225/    D7D4 : C5                          push    bc
+     225/    D7D5 : 06 01                       ld      b,CF_FEATURES
+     225/    D7D7 : CD CA EE                    call    idewr
+     225/    D7DA : C1                          pop     bc
+     225/    D7DB : F1                          pop     af
+     225/    D7DC :                     
+     226/    D7DC : 3E EF               	ld	a,CF_SET_FEAT
+     227/    D7DE : (MACRO)             	ideout	CF_COMMAND
+     227/    D7DE : F5                          push    af
+     227/    D7DF : C5                          push    bc
+     227/    D7E0 : 06 07                       ld      b,CF_COMMAND
+     227/    D7E2 : CD CA EE                    call    idewr
+     227/    D7E5 : C1                          pop     bc
+     227/    D7E6 : F1                          pop     af
+     227/    D7E7 :                     
+     228/    D7E7 :                     
+     229/    D7E7 :                     
+     230/    D7E7 : CD BC DB            	call	cfWait
+     231/    D7EA : 3E 82               	ld 	a,CF_NOCACHE	; No write cache
+     232/    D7EC : (MACRO)             	ideout	CF_FEATURES
+     232/    D7EC : F5                          push    af
+     232/    D7ED : C5                          push    bc
+     232/    D7EE : 06 01                       ld      b,CF_FEATURES
+     232/    D7F0 : CD CA EE                    call    idewr
+     232/    D7F3 : C1                          pop     bc
+     232/    D7F4 : F1                          pop     af
+     232/    D7F5 :                     
+     233/    D7F5 : 3E EF               	ld	a,CF_SET_FEAT
+     234/    D7F7 : (MACRO)             	ideout	CF_COMMAND
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 6 - 2/13/2018 8:47:39
+
+
+     234/    D7F7 : F5                          push    af
+     234/    D7F8 : C5                          push    bc
+     234/    D7F9 : 06 07                       ld      b,CF_COMMAND
+     234/    D7FB : CD CA EE                    call    idewr
+     234/    D7FE : C1                          pop     bc
+     234/    D7FF : F1                          pop     af
+     234/    D800 :                     
+     235/    D800 :                     
+     236/    D800 : AF                  	xor	a		; Clear I/O & drive bytes.
+     237/    D801 : 32 04 00            	ld	(userdrv),A
+     238/    D804 : C3 7D D8            	jp	gocpm
+     239/    D807 :                     
+     240/    D807 :                     ;==============================================================================
+     241/    D807 :                     ; Warm boot
+     242/    D807 :                     ;==============================================================================
+     243/    D807 :                     
+     244/    D807 : F3                  wboot	di				; Disable interrupts.
+     245/    D808 : 31 94 EC            	ld	sp,biosstack		; Set default stack.
+     246/    D80B :                     
+     247/    D80B : 06 0B               	ld	b,11 ; Number of sectors to reload
+     248/    D80D :                     
+     249/    D80D : 3E 00               	ld	a,0
+     250/    D80F : 32 9C EC            	ld	(hstsec),A
+     251/    D812 : 21 00 C0            	ld	hl,ccp
+     252/    D815 :                     
+     253/    D815 :                     rdSectors
+     254/    D815 :                     
+     255/    D815 : CD BC DB            	call	cfWait
+     256/    D818 : 3A 9C EC            	ld	a,(hstsec)
+     257/    D81B : (MACRO)             	ideout 	CF_LBA0
+     257/    D81B : F5                          push    af
+     257/    D81C : C5                          push    bc
+     257/    D81D : 06 03                       ld      b,CF_LBA0
+     257/    D81F : CD CA EE                    call    idewr
+     257/    D822 : C1                          pop     bc
+     257/    D823 : F1                          pop     af
+     257/    D824 :                     
+     258/    D824 : 3E 00               	ld	a,0
+     259/    D826 : (MACRO)             	ideout 	CF_LBA1
+     259/    D826 : F5                          push    af
+     259/    D827 : C5                          push    bc
+     259/    D828 : 06 04                       ld      b,CF_LBA1
+     259/    D82A : CD CA EE                    call    idewr
+     259/    D82D : C1                          pop     bc
+     259/    D82E : F1                          pop     af
+     259/    D82F :                     
+     260/    D82F : (MACRO)             	ideout 	CF_LBA2
+     260/    D82F : F5                          push    af
+     260/    D830 : C5                          push    bc
+     260/    D831 : 06 05                       ld      b,CF_LBA2
+     260/    D833 : CD CA EE                    call    idewr
+     260/    D836 : C1                          pop     bc
+     260/    D837 : F1                          pop     af
+     260/    D838 :                     
+     261/    D838 : 3E E0               	ld	a,0E0H
+     262/    D83A : (MACRO)             	ideout 	CF_LBA3
+     262/    D83A : F5                          push    af
+     262/    D83B : C5                          push    bc
+     262/    D83C : 06 06                       ld      b,CF_LBA3
+     262/    D83E : CD CA EE                    call    idewr
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 7 - 2/13/2018 8:47:39
+
+
+     262/    D841 : C1                          pop     bc
+     262/    D842 : F1                          pop     af
+     262/    D843 :                     
+     263/    D843 : 3E 01               	ld 	a,1
+     264/    D845 : (MACRO)             	ideout	CF_SECCOUNT
+     264/    D845 : F5                          push    af
+     264/    D846 : C5                          push    bc
+     264/    D847 : 06 02                       ld      b,CF_SECCOUNT
+     264/    D849 : CD CA EE                    call    idewr
+     264/    D84C : C1                          pop     bc
+     264/    D84D : F1                          pop     af
+     264/    D84E :                     
+     265/    D84E :                     
+     266/    D84E : C5                  	push 	bc
+     267/    D84F :                     
+     268/    D84F : CD BC DB            	call 	cfWait
+     269/    D852 :                     
+     270/    D852 : 3E 20               	LD 	A,CF_READ_SEC
+     271/    D854 : (MACRO)             	ideout 	CF_COMMAND
+     271/    D854 : F5                          push    af
+     271/    D855 : C5                          push    bc
+     271/    D856 : 06 07                       ld      b,CF_COMMAND
+     271/    D858 : CD CA EE                    call    idewr
+     271/    D85B : C1                          pop     bc
+     271/    D85C : F1                          pop     af
+     271/    D85D :                     
+     272/    D85D :                     
+     273/    D85D : CD BC DB            	call 	cfWait
+     274/    D860 :                     
+     275/    D860 : 0E 04               	ld 	c,4
+     276/    D862 :                     
+     277/    D862 :                     rd4secs512
+     278/    D862 :                     
+     279/    D862 : 06 80               	ld 	b,128
+     280/    D864 :                     
+     281/    D864 :                     rdByte512
+     282/    D864 :                     
+     283/    D864 : (MACRO)             	idein 	CF_DATA
+     283/    D864 : C5                          push    bc
+     283/    D865 : 06 00                       ld      b,CF_DATA
+     283/    D867 : CD EA EE                    call    iderd
+     283/    D86A : C1                          pop     bc
+     283/    D86B :                     
+     284/    D86B : 77                  	ld 	(hl),a
+     285/    D86C : 23                  	inc 	hl
+     286/    D86D : 05                  	dec 	b
+     287/    D86E : 20 F4               	jr 	nz, rdByte512
+     288/    D870 : 0D                  	dec 	c
+     289/    D871 : 20 EF               	jr 	nz,rd4secs512
+     290/    D873 :                     
+     291/    D873 : C1                  	pop 	bc
+     292/    D874 :                     
+     293/    D874 : 3A 9C EC            	ld	a,(hstsec)
+     294/    D877 : 3C                  	inc	a
+     295/    D878 : 32 9C EC            	ld	(hstsec),a
+     296/    D87B :                     
+     297/    D87B : 10 98               	djnz	rdSectors
+     298/    D87D :                     
+     299/    D87D :                     
+     300/    D87D :                     ;==============================================================================
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 8 - 2/13/2018 8:47:39
+
+
+     301/    D87D :                     ; Common code for cold and warm boot
+     302/    D87D :                     ;==============================================================================
+     303/    D87D :                     
+     304/    D87D : =0H                 rtcint	equ	0000h
+     305/    D87D :                     
+     306/    D87D : AF                  gocpm	xor	a			; 0 to accumulator
+     307/    D87E : 32 9E EC            	ld	(hstact),a		; host buffer inactive
+     308/    D881 : 32 A0 EC            	ld	(unacnt),a		; clear unalloc count
+     309/    D884 :                     
+     310/    D884 : 21 00 00            	ld	hl,rtcint		; ADDress of serial interrupt.
+     311/    D887 : 22 39 00            	ld	(039h),hl
+     312/    D88A : 21 80 00            	ld	hl,tpabuf		; ADDress of BIOS DMA buffer.
+     313/    D88D : 22 A9 EC            	ld	(dmaAddr),hl
+     314/    D890 : 3E C3               	ld	a,0C3h			; Opcode for 'JP'.
+     315/    D892 : 32 00 00            	ld	(00h),a			; Load at start of RAM.
+     316/    D895 : 32 38 00            	ld	(38h),a
+     317/    D898 : 32 66 00            	ld	(nmi),a			; Init NMI vector
+     318/    D89B : 21 03 D6            	ld	hl,wboote		; ADDress of jump for a warm boot.
+     319/    D89E : 22 01 00            	ld	(01h),hl
+     320/    D8A1 : 22 67 00            	ld	(nmi+1),hl		; Warm reset per NMI
+     321/    D8A4 : 32 05 00            	ld	(05h),a			; Opcode for 'JP'.
+     322/    D8A7 : 21 06 C8            	ld	hl,bdos			; ADDress of jump for the BDOS.
+     323/    D8AA : 22 06 00            	ld	(06h),hl
+     324/    D8AD : 3A 04 00            	ld	a,(userdrv)		; Save new drive number (0).
+     325/    D8B0 : 4F                  	ld	c,a			; Pass drive number in C.
+     326/    D8B1 : C3 00 C0            	jp	ccp			; Start CP/M by jumping to the CCP.
+     327/    D8B4 :                     
+     328/    D8B4 :                     ;==============================================================================
+     329/    D8B4 :                     ; Console I/O routines
+     330/    D8B4 :                     ;==============================================================================
+     331/    D8B4 :                     
+     332/    D8B4 : 3A 03 00            const	ld	a,(iobyte)
+     333/    D8B7 : E6 0B               	and	00001011b ; Mask off console and high bit of reader
+     334/    D8B9 : FE 0A               	cp	00001010b ; redirected to reader on UR1/2 (Serial A)
+     335/    D8BB : 28 0A               	jr	z,constA
+     336/    D8BD : FE 02               	cp	00000010b ; redirected to reader on TTY/RDR (Serial B)
+     337/    D8BF : 28 15               	jr	z,constB
+     338/    D8C1 :                     
+     339/    D8C1 : E6 03               	and	03 ; remove the reader from the mask - only console bits then remain
+     340/    D8C3 : FE 01               	cp	01
+     341/    D8C5 : 20 0F               	jr	nz,constB
+     342/    D8C7 :                     
+     343/    D8C7 : E5                  constA	push	hl
+     344/    D8C8 : DB 01               	in	a,(acia0stat)
+     345/    D8CA : CB 4F               	bit	1,a
+     346/    D8CC : 28 04               	jr	z, dataAEmpty
+     347/    D8CE : 3E FF               	ld	a,0FFH
+     348/    D8D0 : E1                  	pop	hl
+     349/    D8D1 : C9                  	ret
+     350/    D8D2 :                     
+     351/    D8D2 :                     dataAEmpty
+     352/    D8D2 :                     
+     353/    D8D2 : 3E 00               	ld	a,0
+     354/    D8D4 : E1                  	pop	hl
+     355/    D8D5 : C9                         	ret
+     356/    D8D6 :                     
+     357/    D8D6 :                     
+     358/    D8D6 : E5                  constB	push	hl
+     359/    D8D7 : DB A1               	in	a,(acia1stat)
+     360/    D8D9 : CB 4F               	bit	1,a
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 9 - 2/13/2018 8:47:39
+
+
+     361/    D8DB : 28 04               	jr	z, dataBEmpty
+     362/    D8DD : 3E FF                	ld	a,0FFH
+     363/    D8DF : E1                  	pop	hl
+     364/    D8E0 : C9                  	ret
+     365/    D8E1 :                     
+     366/    D8E1 :                     dataBEmpty
+     367/    D8E1 :                     
+     368/    D8E1 : 3E 00               	ld	a,0
+     369/    D8E3 : E1                  	pop	hl
+     370/    D8E4 : C9                          ret
+     371/    D8E5 :                     
+     372/    D8E5 :                     ;-----------------------------------------------------------------------------
+     373/    D8E5 : E5                  reader	push	hl
+     374/    D8E6 : F5                  	push	af
+     375/    D8E7 : 3A 03 00            reader2	ld	a,(iobyte)
+     376/    D8EA : E6 08               	and	08
+     377/    D8EC : FE 08               	cp	08
+     378/    D8EE : 20 1C               	jr	nz,coninB
+     379/    D8F0 : 18 0F               	jr	coninA
+     380/    D8F2 :                     ;------------------------------------------------------------------------------
+     381/    D8F2 :                     
+     382/    D8F2 : E5                  conin	push	hl
+     383/    D8F3 : F5                  	push	af
+     384/    D8F4 : 3A 03 00            	ld	a,(iobyte)
+     385/    D8F7 : E6 03               	and	03
+     386/    D8F9 : FE 02               	cp	02
+     387/    D8FB : 28 EA               	jr	z,reader2	; "BAT:" redirect
+     388/    D8FD : FE 01               	cp	01
+     389/    D8FF : 20 0B               	jr	nz,coninB
+     390/    D901 :                     	
+     391/    D901 :                     
+     392/    D901 : F1                  coninA	pop	af
+     393/    D902 :                     
+     394/    D902 :                     waitForCharA
+     395/    D902 :                     
+     396/    D902 : DB 01               	in	a,(acia0stat)
+     397/    D904 : CB 4F               	bit	1,a
+     398/    D906 : 28 FA               	jr	z,waitForCharA
+     399/    D908 : DB 02               	in	a,(acia0data)
+     400/    D90A : E1                  	pop	hl
+     401/    D90B : C9                  	ret			; Char ready in A
+     402/    D90C :                     
+     403/    D90C :                     
+     404/    D90C : F1                  coninB	pop	af
+     405/    D90D :                     
+     406/    D90D :                     waitForCharB
+     407/    D90D :                     
+     408/    D90D : DB A1               	in	a,(acia1stat)
+     409/    D90F : CB 4F               	bit	1,a
+     410/    D911 : 28 FA               	jr	z, waitForCharB
+     411/    D913 : DB A0               	in	a,(acia1data)
+     412/    D915 : E1                  	pop	hl
+     413/    D916 : C9                  	ret			; Char ready in A
+     414/    D917 :                     
+     415/    D917 :                     ;------------------------------------------------------------------------------
+     416/    D917 :                     
+     417/    D917 : F5                  list	push	af		; Store character
+     418/    D918 : 3A 03 00            list2	ld	a,(iobyte)
+     419/    D91B : E6 C0               	and	0C0h
+     420/    D91D : FE 40               	cp	040h
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 10 - 2/13/2018 8:47:39
+
+
+     421/    D91F : 20 27               	jr	nz,conoutB1
+     422/    D921 : 18 1A               	jr	conoutA1
+     423/    D923 :                     
+     424/    D923 :                     ;------------------------------------------------------------------------------
+     425/    D923 : F5                  punch	push	af		; Store character
+     426/    D924 : 3A 03 00            	ld	a,(iobyte)
+     427/    D927 : E6 20               	and	020h
+     428/    D929 : FE 20               	cp	020h
+     429/    D92B : 20 1B               	jr	nz,conoutB1
+     430/    D92D : 18 0E               	jr	conoutA1
+     431/    D92F :                     
+     432/    D92F :                     ;------------------------------------------------------------------------------
+     433/    D92F : F5                  conout	push	af		; Store character
+     434/    D930 : 3A 03 00            	ld	a,(iobyte)
+     435/    D933 : E6 03               	and	03
+     436/    D935 : FE 02               	CP	02
+     437/    D937 : 28 DF               	jr	z,list2		; "BAT:" redirect
+     438/    D939 : FE 01               	cp	01
+     439/    D93B : 20 0B               	jr	nz,conoutB1
+     440/    D93D :                     
+     441/    D93D :                     conoutA1
+     442/    D93D :                     
+     443/    D93D : DB 01               	in	a,(acia0stat)
+     444/    D93F : CB 47               	bit	0,a
+     445/    D941 : 28 FA               	jr	z,conouta1
+     446/    D943 : 79                  	ld	a,c
+     447/    D944 : D3 02               	out	(acia0data),a	; OUTput the character
+     448/    D946 : F1                  	pop	aF		; RETrieve character
+     449/    D947 : C9                  	ret
+     450/    D948 :                     
+     451/    D948 :                     conoutB1
+     452/    D948 :                     
+     453/    D948 : DB A1               	in	a,(acia1stat)	; See if SIO channel B is finished transmitting
+     454/    D94A : CB 47               	bit	0,a
+     455/    D94C : 28 FA               	jr	z,conoutB1	; Loop until SIO flag signals ready
+     456/    D94E : 79                  	ld	a,c
+     457/    D94F : D3 A0               	out	(acia1data),a		; OUTput the character
+     458/    D951 : F1                  	pop	af		; RETrieve character
+     459/    D952 : C9                  	ret
+     460/    D953 :                     
+     461/    D953 :                     ;------------------------------------------------------------------------------
+     462/    D953 : 3E FF               listst	ld	a,0FFh		; Return list status of 0xFF (ready).
+     463/    D955 : C9                  	ret
+     464/    D956 :                     
+     465/    D956 :                     ;==============================================================================
+     466/    D956 :                     ; Disk processing entry points
+     467/    D956 :                     ;==============================================================================
+     468/    D956 :                     
+     469/    D956 : 21 00 00            seldsk	ld	hl,0000
+     470/    D959 : 79                  	ld	a,c
+     471/    D95A : FE 10               	cp	16		; 16 for 128MB disk, 8 for 64MB disk
+     472/    D95C : 38 0D               	jr	c,chgdsk	; if invalid drive will give BDOS error
+     473/    D95E : 3A 04 00            	ld	a,(userdrv)	; so set the drive back to a:
+     474/    D961 : B9                  	cp	c		; If the default disk is not the same as the
+     475/    D962 : C0                  	ret	nz		; selected drive then return, 
+     476/    D963 : AF                  	xor	a		; else reset default back to a:
+     477/    D964 : 32 04 00            	ld	(userdrv),A	; otherwise will be stuck in a loop
+     478/    D967 : 32 94 EC            	ld	(sekdsk),A
+     479/    D96A : C9                  	ret
+     480/    D96B :                     
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 11 - 2/13/2018 8:47:39
+
+
+     481/    D96B : 32 94 EC            chgdsk	ld 	(sekdsk),A
+     482/    D96E : CB 07               	rlc	a		;*2
+     483/    D970 : CB 07               	rlc	a		;*4
+     484/    D972 : CB 07               	rlc	a		;*8
+     485/    D974 : CB 07               	rlc	a		;*16
+     486/    D976 : 21 33 D6            	ld 	hl,dpbase
+     487/    D979 : 06 00               	ld	b,0
+     488/    D97B : 4F                  	ld	c,a	
+     489/    D97C : 09                  	add	hl,bc
+     490/    D97D : C9                  	ret
+     491/    D97E :                     
+     492/    D97E :                     ;------------------------------------------------------------------------------
+     493/    D97E : 3A 9F EC            home	ld	a,(hstwrt)	;check for pending write
+     494/    D981 : B7                  	or	a
+     495/    D982 : 20 03               	jr	nz,homed
+     496/    D984 : 32 9E EC            	ld	(hstact),a	;clear host active flag
+     497/    D987 : 01 00 00            homed	ld 	bc,0000h
+     498/    D98A :                     
+     499/    D98A :                     ;------------------------------------------------------------------------------------------------
+     500/    D98A : ED 43 95 EC         settrk	ld 	(sektrk),bc	; Set track passed from BDOS in register BC.
+     501/    D98E : C9                  	ret
+     502/    D98F :                     
+     503/    D98F :                     ;------------------------------------------------------------------------------
+     504/    D98F : ED 43 97 EC         setsec	ld 	(seksec),bc	; Set sector passed from BDOS in register BC.
+     505/    D993 : C9                  	ret
+     506/    D994 :                     
+     507/    D994 :                     ;------------------------------------------------------------------------------
+     508/    D994 : ED 43 A9 EC         setdma	ld 	(dmaAddr),bc	; Set DMA ADDress given by registers BC.
+     509/    D998 : C9                  	ret
+     510/    D999 :                     
+     511/    D999 :                     ;------------------------------------------------------------------------------
+     512/    D999 : C5                  sectran	push 	bc
+     513/    D99A : E1                  	pop 	hl
+     514/    D99B : C9                  	ret
+     515/    D99C :                     
+     516/    D99C :                     ;------------------------------------------------------------------------------
+     517/    D99C :                     		;read the selected CP/M sector
+     518/    D99C :                     
+     519/    D99C : AF                  read	xor	a
+     520/    D99D : 32 A0 EC            	ld	(unacnt),a
+     521/    D9A0 : 3E 01               	ld	a,1
+     522/    D9A2 : 32 A7 EC            	ld	(readop),a	;read operation
+     523/    D9A5 : 32 A6 EC            	ld	(rsflag),a	;must read data
+     524/    D9A8 : 3E 02               	ld	a,wrual
+     525/    D9AA : 32 A8 EC            	ld	(wrtype),a	;treat as unalloc
+     526/    D9AD : C3 17 DA            	jp	rwoper		;to perform the read
+     527/    D9B0 :                     
+     528/    D9B0 :                     
+     529/    D9B0 :                     ;------------------------------------------------------------------------------
+     530/    D9B0 :                     		;write the selected CP/M sector
+     531/    D9B0 : AF                  write	xor	a		;0 to accumulator
+     532/    D9B1 : 32 A7 EC            	ld	(readop),a	;not a read operation
+     533/    D9B4 : 79                  	ld	a,c		;write type in c
+     534/    D9B5 : 32 A8 EC            	ld	(wrtype),a
+     535/    D9B8 : FE 02               	cp	wrual		;write unallocated?
+     536/    D9BA : 20 17               	jr	nz,chkuna	;check for unalloc
+     537/    D9BC :                     
+     538/    D9BC :                     ;
+     539/    D9BC :                     ;		write to unallocated, set parameters
+     540/    D9BC :                     
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 12 - 2/13/2018 8:47:39
+
+
+     541/    D9BC : 3E 20               	ld	a,blksiz/128	;next unalloc recs
+     542/    D9BE : 32 A0 EC            	ld	(unacnt),a
+     543/    D9C1 : 3A 94 EC            	ld	a,(sekdsk)	;disk to seek
+     544/    D9C4 : 32 A1 EC            	ld	(unadsk),a	;unadsk = sekdsk
+     545/    D9C7 : 2A 95 EC            	ld	hl,(sektrk)
+     546/    D9CA : 22 A2 EC            	ld	(unatrk),hl	;unatrk = sectrk
+     547/    D9CD : 3A 97 EC            	ld	a,(seksec)
+     548/    D9D0 : 32 A4 EC            	ld	(unasec),a	;unasec = seksec
+     549/    D9D3 :                     
+     550/    D9D3 :                     	;		check for write to unallocated sector
+     551/    D9D3 :                     
+     552/    D9D3 : 3A A0 EC            chkuna	ld	a,(unacnt)	;any unalloc remain?
+     553/    D9D6 : B7                  	or	a	
+     554/    D9D7 : 28 36               	jr	z,alloc		;skip if not
+     555/    D9D9 :                     
+     556/    D9D9 :                     ;
+     557/    D9D9 :                     ;		more unallocated records remain
+     558/    D9D9 :                     
+     559/    D9D9 : 3D                  	dec	a		;unacnt = unacnt-1
+     560/    D9DA : 32 A0 EC            	ld	(unacnt),a
+     561/    D9DD : 3A 94 EC            	ld	a,(sekdsk)	;same disk?
+     562/    D9E0 : 21 A1 EC            	ld	hl,unadsk
+     563/    D9E3 : BE                  	cp	(hl)		;sekdsk = unadsk?
+     564/    D9E4 : C2 0F DA            	jp	nz,alloc	;skip if not
+     565/    D9E7 :                     
+     566/    D9E7 :                     ;
+     567/    D9E7 :                     ;		disks are the same
+     568/    D9E7 :                     
+     569/    D9E7 : 21 A2 EC            	ld	hl,unatrk
+     570/    D9EA : CD AE DA            	call	sektrkcmp	;sektrk = unatrk?
+     571/    D9ED : C2 0F DA            	jp	nz,alloc	;skip if not
+     572/    D9F0 :                     
+     573/    D9F0 :                     ;
+     574/    D9F0 :                     ;		tracks are the same
+     575/    D9F0 :                     
+     576/    D9F0 : 3A 97 EC            	ld	a,(seksec)	;same sector?
+     577/    D9F3 : 21 A4 EC            	ld	hl,unasec
+     578/    D9F6 : BE                  	cp	(hl)		;seksec = unasec?
+     579/    D9F7 : C2 0F DA            	jp	nz,alloc	;skip if not
+     580/    D9FA :                     
+     581/    D9FA :                     ;
+     582/    D9FA :                     ;		match, move to next sector for future ref
+     583/    D9FA :                     
+     584/    D9FA : 34                  	inc	(hl)		;unasec = unasec+1
+     585/    D9FB : 7E                  	ld	a,(hl)		;end of track?
+     586/    D9FC : FE 80               	cp	cpmspt		;count CP/M sectors
+     587/    D9FE : 38 09               	jr	c,noovf		;skip if no overflow
+     588/    DA00 :                     ;
+     589/    DA00 :                     ;		overflow to next track
+     590/    DA00 :                     
+     591/    DA00 : 36 00               	ld	(hl),0		;unasec = 0
+     592/    DA02 : 2A A2 EC            	ld	hl,(unatrk)
+     593/    DA05 : 23                  	inc	hl
+     594/    DA06 : 22 A2 EC            	ld	(unatrk),hl	;unatrk = unatrk+1
+     595/    DA09 :                     
+     596/    DA09 :                     ;
+     597/    DA09 :                     		;match found, mark as unnecessary read
+     598/    DA09 :                     
+     599/    DA09 : AF                  noovf	xor	a		;0 to accumulator
+     600/    DA0A : 32 A6 EC            	ld	(rsflag),a	;rsflag = 0
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 13 - 2/13/2018 8:47:39
+
+
+     601/    DA0D : 18 08               	jr	rwoper		;to perform the write
+     602/    DA0F :                     ;
+     603/    DA0F :                     		;not an unallocated record, requires pre-read
+     604/    DA0F :                     
+     605/    DA0F : AF                  alloc	xor	a		;0 to accum
+     606/    DA10 : 32 A0 EC            	ld	(unacnt),a	;unacnt = 0
+     607/    DA13 : 3C                  	inc	a		;1 to accum
+     608/    DA14 : 32 A6 EC            	ld	(rsflag),a	;rsflag = 1
+     609/    DA17 :                     
+     610/    DA17 :                     ;------------------------------------------------------------------------------
+     611/    DA17 :                     		;enter here to perform the read/write
+     612/    DA17 :                     
+     613/    DA17 : AF                  rwoper	xor	a		;zero to accum
+     614/    DA18 : 32 A5 EC            	ld	(erflag),a	;no errors (yet)
+     615/    DA1B : 3A 97 EC            	ld	a,(seksec)	;compute host sector
+     616/    DA1E : B7                  	or	a		;carry = 0
+     617/    DA1F : 1F                  	rra			;shift right
+     618/    DA20 : B7                  	or	a		;carry = 0
+     619/    DA21 : 1F                  	rra			;shift right
+     620/    DA22 : 32 9D EC            	ld	(sekhst),a	;host sector to seek
+     621/    DA25 :                     ;
+     622/    DA25 :                     ;		active host sector?
+     623/    DA25 :                     
+     624/    DA25 : 21 9E EC            	ld	hl,hstact	;host active flag
+     625/    DA28 : 7E                  	ld	a,(hl)
+     626/    DA29 : 36 01               	ld	(hl),1		;always becomes 1
+     627/    DA2B : B7                  	or	a		;was it already?
+     628/    DA2C : 28 21               	jr	z,filhst	;fill host if not
+     629/    DA2E :                     ;
+     630/    DA2E :                     ;		host buffer active, same as seek buffer?
+     631/    DA2E :                     
+     632/    DA2E : 3A 94 EC            	ld	a,(sekdsk)
+     633/    DA31 : 21 99 EC            	ld	hl,hstdsk	;same disk?
+     634/    DA34 : BE                  	cp	(hl)		;sekdsk = hstdsk?
+     635/    DA35 : 20 11               	jr	nz,nomatch
+     636/    DA37 :                     ;
+     637/    DA37 :                     ;		same disk, same track?
+     638/    DA37 :                     
+     639/    DA37 : 21 9A EC            	ld	hl,hsttrk
+     640/    DA3A : CD AE DA            	call	sektrkcmp	;sektrk = hsttrk?
+     641/    DA3D : 20 09               	jr	nz,nomatch
+     642/    DA3F :                     
+     643/    DA3F :                     ;
+     644/    DA3F :                     ;		same disk, same track, same buffer?
+     645/    DA3F :                     
+     646/    DA3F : 3A 9D EC            	ld	a,(sekhst)
+     647/    DA42 : 21 9C EC            	ld	hl,hstsec	;sekhst = hstsec?
+     648/    DA45 : BE                  	cp	(hl)
+     649/    DA46 : 28 24               	jr	z,match		;skip if match
+     650/    DA48 :                     
+     651/    DA48 :                     		;proper disk, but not correct sector
+     652/    DA48 :                     
+     653/    DA48 : 3A 9F EC            nomatch	ld	a,(hstwrt)	;host written?
+     654/    DA4B : B7                  	or	a
+     655/    DA4C : C4 85 DB            	call	nz,writehst	;clear host buff
+     656/    DA4F :                     
+     657/    DA4F :                     ;
+     658/    DA4F :                     		;may have to fill the host buffer
+     659/    DA4F :                     
+     660/    DA4F : 3A 94 EC            filhst	ld	a,(sekdsk)
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 14 - 2/13/2018 8:47:39
+
+
+     661/    DA52 : 32 99 EC            	ld	(hstdsk),a
+     662/    DA55 : 2A 95 EC            	ld	hl,(sektrk)
+     663/    DA58 : 22 9A EC            	ld	(hsttrk),hl
+     664/    DA5B : 3A 9D EC            	ld	a,(sekhst)
+     665/    DA5E : 32 9C EC            	ld	(hstsec),a
+     666/    DA61 : 3A A6 EC            	ld	a,(rsflag)	;need to read?
+     667/    DA64 : B7                  	or	a
+     668/    DA65 : C4 50 DB            	call	nz,readhst	;yes, if 1
+     669/    DA68 : AF                  	xor	a		;0 to accum
+     670/    DA69 : 32 9F EC            	ld	(hstwrt),a	;no pending write
+     671/    DA6C :                     
+     672/    DA6C :                     		;copy data to or from buffer
+     673/    DA6C :                     
+     674/    DA6C : 3A 97 EC            match	ld	a,(seksec)	;mask buffer number
+     675/    DA6F : E6 03               	and	secmsk		;least signif bits
+     676/    DA71 : 6F                  	ld	l,a		;ready to shift
+     677/    DA72 : 26 00               	ld	h,0		;double count
+     678/    DA74 : 29                  	add	hl,hl
+     679/    DA75 : 29                  	add	hl,hl
+     680/    DA76 : 29                  	add	hl,hl
+     681/    DA77 : 29                  	add	hl,hl
+     682/    DA78 : 29                  	add	hl,hl
+     683/    DA79 : 29                  	add	hl,hl
+     684/    DA7A : 29                  	add	hl,hl
+     685/    DA7B :                     
+     686/    DA7B :                     ;		hl has relative host buffer address
+     687/    DA7B :                     
+     688/    DA7B : 11 AB EC            	ld	de,hstbuf
+     689/    DA7E : 19                  	add	hl,de		;hl = host address
+     690/    DA7F : EB                  	ex	de,hl		;now in DE
+     691/    DA80 : 2A A9 EC            	ld	hl,(dmaAddr)	;get/put CP/M data
+     692/    DA83 : 0E 80               	ld	c,128		;length of move
+     693/    DA85 : 3A A7 EC            	ld	a,(readop)	;which way?
+     694/    DA88 : B7                  	or	a
+     695/    DA89 : 20 06               	jr	nz,rwmove	;skip if read
+     696/    DA8B :                     ;
+     697/    DA8B :                     ;	write operation, mark and switch direction
+     698/    DA8B :                     
+     699/    DA8B : 3E 01               	ld	a,1
+     700/    DA8D : 32 9F EC            	ld	(hstwrt),a	;hstwrt = 1
+     701/    DA90 : EB                  	ex	de,hl		;source/dest swap
+     702/    DA91 :                     ;
+     703/    DA91 :                     		;C initially 128, DE is source, HL is dest
+     704/    DA91 :                     
+     705/    DA91 : 1A                  rwmove	ld	a,(de)		;source character
+     706/    DA92 : 13                  	inc	de
+     707/    DA93 : 77                  	ld	(hl),a		;to dest
+     708/    DA94 : 23                  	inc	hl
+     709/    DA95 : 0D                  	dec	c		;loop 128 times
+     710/    DA96 : 20 F9               	jr	nz,rwmove
+     711/    DA98 :                     
+     712/    DA98 :                     ;
+     713/    DA98 :                     ;		data has been moved to/from host buffer
+     714/    DA98 :                     
+     715/    DA98 : 3A A8 EC            	ld	a,(wrtype)	;write type
+     716/    DA9B : FE 01               	cp	wrdir		;to directory?
+     717/    DA9D : 3A A5 EC            	ld	a,(erflag)	;in case of errors
+     718/    DAA0 : C0                  	ret	nz		;no further processing
+     719/    DAA1 :                     
+     720/    DAA1 :                     ;
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 15 - 2/13/2018 8:47:39
+
+
+     721/    DAA1 :                     ;		clear host buffer for directory write
+     722/    DAA1 :                     
+     723/    DAA1 : B7                  	or	a		;errors?
+     724/    DAA2 : C0                  	ret	nz		;skip if so
+     725/    DAA3 : AF                  	xor	a		;0 to accum
+     726/    DAA4 : 32 9F EC            	ld	(hstwrt),a	;buffer written
+     727/    DAA7 : CD 85 DB            	call	writehst
+     728/    DAAA : 3A A5 EC            	ld	a,(erflag)
+     729/    DAAD : C9                  	ret
+     730/    DAAE :                     
+     731/    DAAE :                     ;------------------------------------------------------------------------------
+     732/    DAAE :                     ;Utility subroutine for 16-bit compare
+     733/    DAAE :                     sektrkcmp:
+     734/    DAAE :                     		;HL = .unatrk or .hsttrk, compare with sektrk
+     735/    DAAE :                     
+     736/    DAAE : EB                  	ex	de,hl
+     737/    DAAF : 21 95 EC            	ld	hl,sektrk
+     738/    DAB2 : 1A                  	ld	a,(de)		;low byte compare
+     739/    DAB3 : BE                  	cp	(HL)		;same?
+     740/    DAB4 : C0                  	ret	nz			;return if not
+     741/    DAB5 :                     
+     742/    DAB5 :                     ;		low bytes equal, test high 1s
+     743/    DAB5 :                     
+     744/    DAB5 : 13                  	inc	de
+     745/    DAB6 : 23                  	inc	hl
+     746/    DAB7 : 1A                  	ld	a,(de)
+     747/    DAB8 : BE                  	cp	(hl)	;sets flags
+     748/    DAB9 : C9                  	ret
+     749/    DABA :                     
+     750/    DABA :                     ;==============================================================================
+     751/    DABA :                     ; Convert track/head/sector into LBA for physical access to the disk
+     752/    DABA :                     ;==============================================================================
+     753/    DABA :                     setLBAaddr:	
+     754/    DABA :                     
+     755/    DABA : 2A 9A EC            	ld	hl,(hsttrk)
+     756/    DABD : CB 05               	rlc	l
+     757/    DABF : CB 05               	rlc	l
+     758/    DAC1 : CB 05               	rlc	l
+     759/    DAC3 : CB 05               	rlc	l
+     760/    DAC5 : CB 05               	rlc	l
+     761/    DAC7 : 7D                  	ld	a,l
+     762/    DAC8 : E6 E0               	and	0E0H
+     763/    DACA : 6F                  	ld	l,a
+     764/    DACB : 3A 9C EC            	ld	a,(hstsec)
+     765/    DACE : 85                  	add	a,l
+     766/    DACF : 32 70 EC            	ld	(lba0),A
+     767/    DAD2 :                     
+     768/    DAD2 : 2A 9A EC            	ld	hl,(hsttrk)
+     769/    DAD5 : CB 0D               	rrc	l
+     770/    DAD7 : CB 0D               	rrc	l
+     771/    DAD9 : CB 0D               	rrc	l
+     772/    DADB : 7D                  	ld	a,l
+     773/    DADC : E6 1F               	and	01FH
+     774/    DADE : 6F                  	ld	l,a
+     775/    DADF : CB 04               	rlc	h
+     776/    DAE1 : CB 04               	rlc	h
+     777/    DAE3 : CB 04               	rlc	h
+     778/    DAE5 : CB 04               	rlc	h
+     779/    DAE7 : CB 04               	rlc	h
+     780/    DAE9 : 7C                  	ld	a,h
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 16 - 2/13/2018 8:47:39
+
+
+     781/    DAEA : E6 20               	and	020H
+     782/    DAEC : 67                  	ld	h,a
+     783/    DAED : 3A 99 EC            	ld	a,(hstdsk)
+     784/    DAF0 : CB 07               	rlc	a
+     785/    DAF2 : CB 07               	rlc	a
+     786/    DAF4 : CB 07               	rlc	a
+     787/    DAF6 : CB 07               	rlc	a
+     788/    DAF8 : CB 07               	rlc	a
+     789/    DAFA : CB 07               	rlc	a
+     790/    DAFC : E6 C0               	and	0C0H
+     791/    DAFE : 84                  	add	a,h
+     792/    DAFF : 85                  	add	a,l
+     793/    DB00 : 32 71 EC            	ld	(lba1),a
+     794/    DB03 :                     		
+     795/    DB03 : 3A 99 EC            	ld	a,(hstdsk)
+     796/    DB06 : CB 0F               	rrc	a
+     797/    DB08 : CB 0F               	rrc	a
+     798/    DB0A : E6 03               	and	03H
+     799/    DB0C : 32 72 EC            	ld	(lba2),a
+     800/    DB0F :                     
+     801/    DB0F :                     ; LBA Mode using drive 0 = E0
+     802/    DB0F :                     
+     803/    DB0F : 3E E0               	ld	a,0E0H
+     804/    DB11 : 32 73 EC            	ld	(lba3),a
+     805/    DB14 :                     
+     806/    DB14 : 3A 70 EC            	ld	a,(lba0)
+     807/    DB17 : (MACRO)             	ideout	CF_LBA0
+     807/    DB17 : F5                          push    af
+     807/    DB18 : C5                          push    bc
+     807/    DB19 : 06 03                       ld      b,CF_LBA0
+     807/    DB1B : CD CA EE                    call    idewr
+     807/    DB1E : C1                          pop     bc
+     807/    DB1F : F1                          pop     af
+     807/    DB20 :                     
+     808/    DB20 : 3A 71 EC            	ld	a,(lba1)
+     809/    DB23 : (MACRO)             	ideout 	CF_LBA1
+     809/    DB23 : F5                          push    af
+     809/    DB24 : C5                          push    bc
+     809/    DB25 : 06 04                       ld      b,CF_LBA1
+     809/    DB27 : CD CA EE                    call    idewr
+     809/    DB2A : C1                          pop     bc
+     809/    DB2B : F1                          pop     af
+     809/    DB2C :                     
+     810/    DB2C : 3A 72 EC            	ld	a,(lba2)
+     811/    DB2F : (MACRO)             	ideout	CF_LBA2
+     811/    DB2F : F5                          push    af
+     811/    DB30 : C5                          push    bc
+     811/    DB31 : 06 05                       ld      b,CF_LBA2
+     811/    DB33 : CD CA EE                    call    idewr
+     811/    DB36 : C1                          pop     bc
+     811/    DB37 : F1                          pop     af
+     811/    DB38 :                     
+     812/    DB38 :                     
+     813/    DB38 : 3A 73 EC            	ld	a,(lba3)
+     814/    DB3B : (MACRO)             	ideout 	CF_LBA3
+     814/    DB3B : F5                          push    af
+     814/    DB3C : C5                          push    bc
+     814/    DB3D : 06 06                       ld      b,CF_LBA3
+     814/    DB3F : CD CA EE                    call    idewr
+     814/    DB42 : C1                          pop     bc
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 17 - 2/13/2018 8:47:39
+
+
+     814/    DB43 : F1                          pop     af
+     814/    DB44 :                     
+     815/    DB44 :                     
+     816/    DB44 : 3E 01               	ld 	a,1
+     817/    DB46 : (MACRO)             	ideout 	CF_SECCOUNT
+     817/    DB46 : F5                          push    af
+     817/    DB47 : C5                          push    bc
+     817/    DB48 : 06 02                       ld      b,CF_SECCOUNT
+     817/    DB4A : CD CA EE                    call    idewr
+     817/    DB4D : C1                          pop     bc
+     817/    DB4E : F1                          pop     af
+     817/    DB4F :                     
+     818/    DB4F :                     
+     819/    DB4F : C9                  	ret				
+     820/    DB50 :                     
+     821/    DB50 :                     ;==============================================================================
+     822/    DB50 :                     ; Read physical sector from host
+     823/    DB50 :                     ;==============================================================================
+     824/    DB50 :                     
+     825/    DB50 : F5                  readhst	push 	af
+     826/    DB51 : C5                  	push 	bc
+     827/    DB52 : E5                  	push 	hl
+     828/    DB53 :                     
+     829/    DB53 : CD BC DB            	call 	cfWait
+     830/    DB56 :                     
+     831/    DB56 : CD BA DA            	call 	setLBAaddr
+     832/    DB59 :                     
+     833/    DB59 : 3E 20               	ld 	a,CF_READ_SEC
+     834/    DB5B : (MACRO)             	ideout 	CF_COMMAND
+     834/    DB5B : F5                          push    af
+     834/    DB5C : C5                          push    bc
+     834/    DB5D : 06 07                       ld      b,CF_COMMAND
+     834/    DB5F : CD CA EE                    call    idewr
+     834/    DB62 : C1                          pop     bc
+     834/    DB63 : F1                          pop     af
+     834/    DB64 :                     
+     835/    DB64 :                     
+     836/    DB64 : CD BC DB            	call 	cfWait
+     837/    DB67 :                     
+     838/    DB67 : 0E 04               	ld 	c,4
+     839/    DB69 : 21 AB EC            	ld 	hl,hstbuf
+     840/    DB6C : 06 80               rd4secs	ld 	b,128
+     841/    DB6E : (MACRO)             rdByte	idein 	CF_DATA
+     841/    DB6E : C5                          push    bc
+     841/    DB6F : 06 00                       ld      b,CF_DATA
+     841/    DB71 : CD EA EE                    call    iderd
+     841/    DB74 : C1                          pop     bc
+     841/    DB75 :                     
+     842/    DB75 : 77                  	ld 	(hl),a
+     843/    DB76 : 23                  	inc 	hl
+     844/    DB77 : 05                  	dec 	b
+     845/    DB78 : 20 F4               	jr 	nz, rdByte
+     846/    DB7A : 0D                  	dec 	c
+     847/    DB7B : 20 EF               	jr 	nz,rd4secs
+     848/    DB7D : E1                  	pop 	hl
+     849/    DB7E : C1                  	pop 	bc
+     850/    DB7F : F1                  	pop 	af
+     851/    DB80 :                     
+     852/    DB80 : AF                  	xor 	a
+     853/    DB81 : 32 A5 EC            	ld	(erflag),a
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 18 - 2/13/2018 8:47:39
+
+
+     854/    DB84 : C9                  	ret
+     855/    DB85 :                     
+     856/    DB85 :                     ;==============================================================================
+     857/    DB85 :                     ; Write physical sector to host
+     858/    DB85 :                     ;==============================================================================
+     859/    DB85 :                     
+     860/    DB85 :                     writehst
+     861/    DB85 : F5                  	push 	af
+     862/    DB86 : C5                  	push 	bc
+     863/    DB87 : E5                  	push 	hl
+     864/    DB88 :                     
+     865/    DB88 :                     
+     866/    DB88 : CD BC DB            	call 	cfWait
+     867/    DB8B :                     
+     868/    DB8B : CD BA DA            	call 	setLBAaddr
+     869/    DB8E :                     
+     870/    DB8E : 3E 30               	ld 	a,CF_WRITE_SEC
+     871/    DB90 : (MACRO)             	ideout 	CF_COMMAND
+     871/    DB90 : F5                          push    af
+     871/    DB91 : C5                          push    bc
+     871/    DB92 : 06 07                       ld      b,CF_COMMAND
+     871/    DB94 : CD CA EE                    call    idewr
+     871/    DB97 : C1                          pop     bc
+     871/    DB98 : F1                          pop     af
+     871/    DB99 :                     
+     872/    DB99 :                     
+     873/    DB99 : CD BC DB            	call 	cfWait
+     874/    DB9C :                     
+     875/    DB9C : 0E 04               	ld 	c,4
+     876/    DB9E : 21 AB EC            	ld 	HL,hstbuf
+     877/    DBA1 : 06 80               wr4secs	ld 	b,128
+     878/    DBA3 : 7E                  wrByte	ld 	a,(hl)
+     879/    DBA4 : (MACRO)             	ideout	CF_DATA
+     879/    DBA4 : F5                          push    af
+     879/    DBA5 : C5                          push    bc
+     879/    DBA6 : 06 00                       ld      b,CF_DATA
+     879/    DBA8 : CD CA EE                    call    idewr
+     879/    DBAB : C1                          pop     bc
+     879/    DBAC : F1                          pop     af
+     879/    DBAD :                     
+     880/    DBAD : 23                  	inc 	hl
+     881/    DBAE : 05                  	dec 	b
+     882/    DBAF : 20 F2               	jr 	nz, wrByte
+     883/    DBB1 :                     
+     884/    DBB1 : 0D                  	dec 	c
+     885/    DBB2 : 20 ED               	jr 	nz,wr4secs
+     886/    DBB4 : E1                  	pop 	hl
+     887/    DBB5 : C1                  	pop 	bc
+     888/    DBB6 : F1                  	pop 	af
+     889/    DBB7 :                     
+     890/    DBB7 : AF                  	xor 	a
+     891/    DBB8 : 32 A5 EC            	ld	(erflag),a
+     892/    DBBB : C9                  	ret
+     893/    DBBC :                     
+     894/    DBBC :                     ;==============================================================================
+     895/    DBBC :                     ; Wait for disk to be ready (busy=0,ready=1)
+     896/    DBBC :                     ;==============================================================================
+     897/    DBBC :                     
+     898/    DBBC : F5                  cfWait	push 	af
+     899/    DBBD : (MACRO)             cfWait1	idein 	CF_STATUS
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 19 - 2/13/2018 8:47:39
+
+
+     899/    DBBD : C5                          push    bc
+     899/    DBBE : 06 07                       ld      b,CF_STATUS
+     899/    DBC0 : CD EA EE                    call    iderd
+     899/    DBC3 : C1                          pop     bc
+     899/    DBC4 :                     
+     900/    DBC4 : E6 80               	and 	080H
+     901/    DBC6 : FE 80               	cp 	080H
+     902/    DBC8 : 28 F3               	jr	z,cfWait1
+     903/    DBCA : F1                  	pop 	af
+     904/    DBCB : C9                  	ret
+     905/    DBCC :                     
+     906/    DBCC :                     ;==============================================================================
+     907/    DBCC :                     ; Utilities
+     908/    DBCC :                     ;==============================================================================
+     909/    DBCC :                     
+     910/    DBCC :                     printInline
+     911/    DBCC : E3                  	ex 	(sp),hl 	; PUSH HL and put RET ADDress into HL
+     912/    DBCD : F5                  	push 	af
+     913/    DBCE : C5                  	push 	bc
+     914/    DBCF :                     nextILChar
+     915/    DBCF : 7E                  	ld 	a,(hl)
+     916/    DBD0 : FE 00               	CP	0
+     917/    DBD2 : 28 07               	jr	z,endOfPrint
+     918/    DBD4 : 4F                  	ld  	c,a
+     919/    DBD5 : CD 2F D9            	call 	conout		; Print to TTY
+     920/    DBD8 : 23                  	inc 	hl
+     921/    DBD9 : 18 F4               	jr	nextILChar
+     922/    DBDB :                     endOfPrint
+     923/    DBDB : 23                  	inc 	hl 		; Get past "null" terminator
+     924/    DBDC : C1                  	pop 	bc
+     925/    DBDD : F1                  	pop 	af
+     926/    DBDE : E3                  	ex 	(sp),hl 	; PUSH new RET ADDress on stack and restore HL
+     927/    DBDF : C9                  	ret
+     928/    DBE0 :                     
+     929/    DBE0 :                     ;==============================================================================
+     930/    DBE0 :                     ; Data storage
+     931/    DBE0 :                     ;==============================================================================
+     932/    DBE0 :                     
+     933/    DBE0 :                     dirbuf 	ds 128			;scratch directory area
+     934/    DC60 :                     alv00	ds 257			;allocation vector 0
+     935/    DD61 :                     alv01	ds 257			;allocation vector 1
+     936/    DE62 :                     alv02	ds 257			;allocation vector 2
+     937/    DF63 :                     alv03	ds 257			;allocation vector 3
+     938/    E064 :                     alv04	ds 257			;allocation vector 4
+     939/    E165 :                     alv05	ds 257			;allocation vector 5
+     940/    E266 :                     alv06	ds 257			;allocation vector 6
+     941/    E367 :                     alv07	ds 257			;allocation vector 7
+     942/    E468 :                     alv08	ds 257			;allocation vector 8
+     943/    E569 :                     alv09	ds 257			;allocation vector 9
+     944/    E66A :                     alv10	ds 257			;allocation vector 10
+     945/    E76B :                     alv11	ds 257			;allocation vector 11
+     946/    E86C :                     alv12	ds 257			;allocation vector 12
+     947/    E96D :                     alv13	ds 257			;allocation vector 13
+     948/    EA6E :                     alv14	ds 257			;allocation vector 14
+     949/    EB6F :                     alv15	ds 257			;allocation vector 15
+     950/    EC70 :                     
+     951/    EC70 : 00                  lba0	DB	00h
+     952/    EC71 : 00                  lba1	DB	00h
+     953/    EC72 : 00                  lba2	DB	00h
+     954/    EC73 : 00                  lba3	DB	00h
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 20 - 2/13/2018 8:47:39
+
+
+     955/    EC74 :                     
+     956/    EC74 :                     	DS	020h		; Start of BIOS stack area.
+     957/    EC94 :                     
+     958/    EC94 : =EC94H              biosstack	EQU	$
+     959/    EC94 :                     
+     960/    EC94 :                     sekdsk	ds	1		;seek disk number
+     961/    EC95 :                     sektrk	ds	2		;seek track number
+     962/    EC97 :                     seksec	ds	2		;seek sector number
+     963/    EC99 :                     ;
+     964/    EC99 :                     hstdsk	ds	1		;host disk number
+     965/    EC9A :                     hsttrk	ds	2		;host track number
+     966/    EC9C :                     hstsec	ds	1		;host sector number
+     967/    EC9D :                     ;
+     968/    EC9D :                     sekhst	ds	1		;seek shr secshf
+     969/    EC9E :                     hstact	ds	1		;host active flag
+     970/    EC9F :                     hstwrt	ds	1		;host written flag
+     971/    ECA0 :                     ;
+     972/    ECA0 :                     unacnt	ds	1		;unalloc rec cnt
+     973/    ECA1 :                     unadsk	ds	1		;last unalloc disk
+     974/    ECA2 :                     unatrk	ds	2		;last unalloc track
+     975/    ECA4 :                     unasec	ds	1		;last unalloc sector
+     976/    ECA5 :                     ;
+     977/    ECA5 :                     erflag	ds	1		;error reporting
+     978/    ECA6 :                     rsflag	ds	1		;read sector flag
+     979/    ECA7 :                     readop	ds	1		;1 if read operation
+     980/    ECA8 :                     wrtype	ds	1		;write operation type
+     981/    ECA9 :                     dmaAddr	ds	2		;last dma address
+     982/    ECAB :                     hstbuf	ds	512		;host buffer
+     983/    EEAB :                     
+     984/    EEAB : =EEABH              hstBufEnd	EQU	$
+     985/    EEAB :                     
+     986/    EEAB :                     
+     987/    EEAB : =EEABH              biosEnd		EQU	$
+     988/    EEAB :                     
+     989/    EEAB :                     ; Disable the ROM, pop the active IO port from the stack (supplied by monitor),
+     990/    EEAB :                     ; then start CP/M
+     991/    EEAB :                     popAndRun
+     992/    EEAB :                     
+     993/    EEAB : AF                  	xor	a 
+     994/    EEAC : D3 40               	out	(040h),A
+     995/    EEAE :                     
+     996/    EEAE : FE 01               	cp	01
+     997/    EEB0 : 28 04               	jr	z,consoleAtB
+     998/    EEB2 : 3E 01               	ld	a,01
+     999/    EEB4 :                     
+    1000/    EEB4 :                     ;(List is TTY:, Punch is TTY:, Reader is TTY:, Console is CRT:)
+    1001/    EEB4 :                     
+    1002/    EEB4 : 18 02               	jr	setIOByte
+    1003/    EEB6 :                     
+    1004/    EEB6 :                     consoleAtB
+    1005/    EEB6 :                     
+    1006/    EEB6 : 3E 00               	ld	a,00
+    1007/    EEB8 :                     
+    1008/    EEB8 :                     ;(List is TTY:, Punch is TTY:, Reader is TTY:, Console is TTY:)
+    1009/    EEB8 :                     
+    1010/    EEB8 :                     setIOByte
+    1011/    EEB8 :                     
+    1012/    EEB8 : 32 03 00            	ld	(iobyte),A
+    1013/    EEBB : C3 00 D6            	jp	bios
+    1014/    EEBE :                     
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 21 - 2/13/2018 8:47:39
+
+
+    1015/    EEBE :                     ;Delay routine for soft reset CF-card
+    1016/    EEBE :                     
+    1017/    EEBE : 3E 02               vdelay	ld	a,2
+    1018/    EEC0 : 3D                  del1	dec	a
+    1019/    EEC1 : 20 FD               	jr	nz,del1
+    1020/    EEC3 : 1B                  	dec	de
+    1021/    EEC4 : 7A                  	ld	a,d
+    1022/    EEC5 : B3                  	or	e
+    1023/    EEC6 : C2 BE EE            	jp	nz,vdelay
+    1024/    EEC9 : C9                  	ret
+    1025/    EECA :                     
+    1026/    EECA :                     ; ide bus routines
+    1027/    EECA :                     
+    1028/    EECA :                     ;	a=data, b=port adress
+    1029/    EECA :                     
+    1030/    EECA : 4F                  idewr	ld	c,a			; Data in C
+    1031/    EECB : 3E 80               	ld	a,80h			; Databus to write direction
+    1032/    EECD : D3 63               	out	(port1ctl),a
+    1033/    EECF : 78                  	ld	a,b			; Address in B
+    1034/    EED0 : D3 60               	out	(port1a),a
+    1035/    EED2 : DB 60               	in	a,(port1a)
+    1036/    EED4 : F6 80               	or	a,10000000b		; CS
+    1037/    EED6 : D3 60               	out	(port1a),a
+    1038/    EED8 : F6 C0               	or	a,11000000b		; CS & WR		
+    1039/    EEDA : D3 60               	out	(port1a),a
+    1040/    EEDC : 47                  	ld	b,a
+    1041/    EEDD : 79                  	ld	a,c
+    1042/    EEDE : D3 61               	out	(port1b),a		; Data on databus
+    1043/    EEE0 : 78                  	ld	a,b
+    1044/    EEE1 : E6 87               	and	a,10000111b		; CS
+    1045/    EEE3 : D3 60               	out	(port1a),a
+    1046/    EEE5 : E6 07               	and	a,00000111b		
+    1047/    EEE7 : D3 60               	out	(port1a),a
+    1048/    EEE9 : C9                  	ret
+    1049/    EEEA :                     
+    1050/    EEEA : 3E 82               iderd	ld	a,82h
+    1051/    EEEC : D3 63               	out	(port1ctl),a
+    1052/    EEEE : 78                  	ld	a,b
+    1053/    EEEF : D3 60               	out	(port1a),a
+    1054/    EEF1 : DB 60               	in	a,(port1a)
+    1055/    EEF3 : F6 80                       or	a,10000000b		; CS
+    1056/    EEF5 : D3 60                       out	(port1a),a
+    1057/    EEF7 : F6 A0               	or	a,10100000b		; CS & RD
+    1058/    EEF9 : D3 60               	out	(port1a),a
+    1059/    EEFB : DB 61               	in	a,(port1b)
+    1060/    EEFD : 4F                  	ld	c,a
+    1061/    EEFE : DB 60               	in	a,(port1a)
+    1062/    EF00 : E6 87                       and	a,10000111b		; CS
+    1063/    EF02 : D3 60                       out	(port1a),a
+    1064/    EF04 : E6 07                       and	a,00000111b
+    1065/    EF06 : D3 60                       out	(port1a),a
+    1066/    EF08 : 79                  	ld	a,c
+    1067/    EF09 : C9                  	ret
+    1068/    EF0A :                     
+    1069/    EF0A :                     ;==============================================================================
+    1070/    EF0A :                     ; Normal start CP/M vector
+    1071/    EF0A :                     ;==============================================================================
+    1072/    EF0A :                     
+    1073/    FFFE :                     	org	0FFFEH
+    1074/    FFFE :                     
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 22 - 2/13/2018 8:47:39
+
+
+    1075/    FFFE : AB EE               	dw	popAndRun
+    1076/   10000 :                     
+    1077/   10000 :                     	end
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 23 - 2/13/2018 8:47:39
+
+
+  symbol table (* = unused):
+  ------------------------
+
+ ACIA0DATA :                      2 - |  ACIA0STAT :                      1 - |
+ ACIA1DATA :                     A0 - |  ACIA1STAT :                     A1 - |
+ ALLOC :                       DA0F C |  ALV00 :                       DC60 C |
+ ALV01 :                       DD61 C |  ALV02 :                       DE62 C |
+ ALV03 :                       DF63 C |  ALV04 :                       E064 C |
+ ALV05 :                       E165 C |  ALV06 :                       E266 C |
+ ALV07 :                       E367 C |  ALV08 :                       E468 C |
+ ALV09 :                       E569 C |  ALV10 :                       E66A C |
+ ALV11 :                       E76B C |  ALV12 :                       E86C C |
+ ALV13 :                       E96D C |  ALV14 :                       EA6E C |
+ ALV15 :                       EB6F C |
+*ARCHITECTURE :                                        x86_64-unknown-linux - |
+ BDOS :                        C806 - | *BIGENDIAN :                      0 - |
+ BIOS :                        D600 - | *BIOSEND :                     EEAB - |
+ BIOSSTACK :                   EC94 - |  BLKSIZ :                      1000 - |
+ BOOT :                        D760 C | *BRANCHEXT :                      0 - |
+*CASESENSITIVE :                  0 - |  CCP :                         C000 - |
+ CFWAIT :                      DBBC C |  CFWAIT1 :                     DBBD C |
+ CF_8BIT :                        1 - |  CF_COMMAND :                     7 - |
+*CF_CYL_HI :                      5 - | *CF_CYL_LOW :                     4 - |
+ CF_DATA :                        0 - | *CF_ERROR :                       1 - |
+ CF_FEATURES :                    1 - | *CF_HEAD :                        6 - |
+ CF_LBA0 :                        3 - |  CF_LBA1 :                        4 - |
+ CF_LBA2 :                        5 - |  CF_LBA3 :                        6 - |
+ CF_NOCACHE :                    82 - |  CF_READ_SEC :                   20 - |
+ CF_SECCOUNT :                    2 - | *CF_SECTOR :                      3 - |
+ CF_SET_FEAT :                   EF - |  CF_STATUS :                      7 - |
+ CF_WRITE_SEC :                  30 - |  CHGDSK :                      D96B C |
+ CHKUNA :                      D9D3 C |  CONIN :                       D8F2 C |
+ CONINA :                      D901 C |  CONINB :                      D90C C |
+ CONOUT :                      D92F C |  CONOUTA1 :                    D93D C |
+ CONOUTB1 :                    D948 C |  CONSOLEATB :                  EEB6 C |
+ CONST :                       D8B4 C |  CONSTA :                      D8C7 C |
+ CONSTB :                      D8D6 C | *CONSTPI :        3.141592653589793 - |
+ CPMSPT :                        80 - |  CR :                             D - |
+ DATAAEMPTY :                  D8D2 C |  DATABEMPTY :                  D8E1 C |
+*DATE :                   2/13/2018 - |  DEL1 :                        EEC0 C |
+ DIRBUF :                      DBE0 C |  DMAADDR :                     ECA9 C |
+ DPB :                         D742 C |  DPB0 :                        D733 C |
+ DPBASE :                      D633 C |  DPBLAST :                     D751 C |
+ ENDOFPRINT :                  DBDB C |  ERFLAG :                      ECA5 C |
+*FALSE :                          0 - |  FF :                             C - |
+ FILHST :                      DA4F C | *FULLPMMU :                       1 - |
+ GOCPM :                       D87D C | *HAS64 :                          1 - |
+*HASDSP :                         0 - | *HASFPU :                         0 - |
+*HASPMMU :                        0 - |  HOME :                        D97E C |
+ HOMED :                       D987 C |  HSTACT :                      EC9E C |
+ HSTBLK :                         4 - |  HSTBUF :                      ECAB C |
+*HSTBUFEND :                   EEAB - |  HSTDSK :                      EC99 C |
+ HSTSEC :                      EC9C C |  HSTSIZ :                       200 - |
+ HSTSPT :                        20 - |  HSTTRK :                      EC9A C |
+ HSTWRT :                      EC9F C |  IDERD :                       EEEA C |
+ IDEWR :                       EECA C | *INEXTMODE :                      0 - |
+*INLWORDMODE :                    0 - | *INMAXMODE :                      0 - |
+*INSRCMODE :                      0 - | *INSUPMODE :                      0 - |
+*INT38 :                         38 - |  IOBYTE :                         3 - |
+ LBA0 :                        EC70 C |  LBA1 :                        EC71 C |
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 24 - 2/13/2018 8:47:39
+
+
+ LBA2 :                        EC72 C |  LBA3 :                        EC73 C |
+ LF :                             A - |  LIST :                        D917 C |
+ LIST2 :                       D918 C | *LISTON :                         1 - |
+ LISTST :                      D953 C | *MACEXP :                         1 - |
+ MATCH :                       DA6C C | *MOMCPU :                        80 - |
+*MOMCPUNAME :                   Z80 - | *NESTMAX :                      100 - |
+ NEXTILCHAR :                  DBCF C |  NMI :                           66 - |
+ NOMATCH :                     DA48 C |  NOOVF :                       DA09 C |
+*PACKING :                        0 - | *PADDING :                        1 - |
+ POPANDRUN :                   EEAB C |  PORT1A :                        60 - |
+ PORT1B :                        61 - | *PORT1C :                        62 - |
+ PORT1CTL :                      63 - |  PRINTINLINE :                 DBCC C |
+ PUNCH :                       D923 C |  RD4SECS :                     DB6C C |
+ RD4SECS512 :                  D862 C |  RDBYTE :                      DB6E C |
+ RDBYTE512 :                   D864 C |  RDSECTORS :                   D815 C |
+ READ :                        D99C C |  READER :                      D8E5 C |
+ READER2 :                     D8E7 C |  READHST :                     DB50 C |
+ READOP :                      ECA7 C | *RELAXED :                        0 - |
+ RSFLAG :                      ECA6 C |  RTCINT :                         0 - |
+ RWMOVE :                      DA91 C |  RWOPER :                      DA17 C |
+ SECMSK :                         3 - |  SECTRAN :                     D999 C |
+ SEKDSK :                      EC94 C |  SEKHST :                      EC9D C |
+ SEKSEC :                      EC97 C |  SEKTRK :                      EC95 C |
+ SEKTRKCMP :                   DAAE C |  SELDSK :                      D956 C |
+ SETDMA :                      D994 C |  SETIOBYTE :                   EEB8 C |
+ SETLBAADDR :                  DABA C |  SETSEC :                      D98F C |
+ SETTRK :                      D98A C | *TIME :                     8:47:39 - |
+ TPABUF :                        80 - | *TRUE :                           1 - |
+ UNACNT :                      ECA0 C |  UNADSK :                      ECA1 C |
+ UNASEC :                      ECA4 C |  UNATRK :                      ECA2 C |
+ USERDRV :                        4 - |  VDELAY :                      EEBE C |
+*VERSION :                     142F - |  WAITFORCHARA :                D902 C |
+ WAITFORCHARB :                D90D C |  WBOOT :                       D807 C |
+ WBOOTE :                      D603 C |  WR4SECS :                     DBA1 C |
+*WRALL :                          0 - |  WRBYTE :                      DBA3 C |
+ WRDIR :                          1 - |  WRITE :                       D9B0 C |
+ WRITEHST :                    DB85 C |  WRTYPE :                      ECA8 C |
+ WRUAL :                          2 - |
+
+    187 symbols
+     38 unused symbols
+
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 25 - 2/13/2018 8:47:39
+
+
+  defined macros:
+  ---------------
+
+IDEIN                                 | IDEOUT                               
+
+      2 macros
+
+ AS V1.42 Beta [Bld 115] - source file cbios128.asm - page 26 - 2/13/2018 8:47:39
+
+
+  codepages:
+  ----------
+
+STANDARD (0 changed characters)
+
+
+0.03 seconds assembly time
+
+   1078 lines source file
+   1219 lines incl. macro expansions
+      2 passes
+      0 errors
+      0 warnings
